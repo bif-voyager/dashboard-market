@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+RangeValue = Literal["7d", "30d", "90d", "all"]
+SyncScope = Literal["recent", "all"]
+
+
+class CategoryItem(BaseModel):
+    slug: str
+    label: str
+    platforms: list[str] = Field(default_factory=list)
+
+
+class SyncSnapshot(BaseModel):
+    platform: str
+    scope: str
+    status: str
+    startedAt: str | None = None
+    finishedAt: str | None = None
+    partial: bool = False
+    message: str | None = None
+    stats: dict = Field(default_factory=dict)
+
+
+class HealthResponse(BaseModel):
+    ok: bool
+    asOf: str | None = None
+    stats: dict[str, int | str | None]
+    sync: list[SyncSnapshot]
+
+
+class VolumePoint(BaseModel):
+    date: str
+    polymarket: float
+    kalshi: float
+    total: float
+
+
+class VolumeTotals(BaseModel):
+    polymarket: float
+    kalshi: float
+    difference: float
+    total: float
+
+
+class VolumeResponse(BaseModel):
+    range: RangeValue
+    categories: list[str]
+    timezone: str
+    asOf: str | None = None
+    partial: bool = False
+    stale: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    totals: VolumeTotals
+    points: list[VolumePoint]
+
+
+class SyncResponse(BaseModel):
+    scope: SyncScope
+    status: str
+    partial: bool = False
+    results: dict[str, dict]
+
