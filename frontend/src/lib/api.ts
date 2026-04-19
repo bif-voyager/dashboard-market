@@ -9,7 +9,7 @@ export interface CategoryItem {
 
 export interface VolumePoint {
   date: string;
-  polymarket: number;
+  polymarket: number | null;
   kalshi: number;
   total: number;
 }

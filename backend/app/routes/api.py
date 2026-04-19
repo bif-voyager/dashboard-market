@@ -80,7 +80,7 @@ async def export_csv(
     )
     buffer = StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["date", "platform", "category_scope", "turnover_usd"])
+    writer.writerow(["date", "platform", "category_scope", "volume_usd_notional"])
     category_scope = ",".join(payload["categories"]) if payload["categories"] else "all"
     for point in payload["points"]:
         writer.writerow([point["date"], "polymarket", category_scope, point["polymarket"]])

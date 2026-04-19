@@ -43,9 +43,19 @@ class DashboardService:
                 points=[],
             ).model_dump()
 
+        polymarket_category_scale = self._polymarket_category_scale(
+            range_value=range_value,
+            categories=selected_categories,
+        )
         end_day = datetime.now(UTC).date()
         if range_value == "all":
             min_day, max_day = self.repository.get_date_bounds(selected_categories)
+            if polymarket_category_scale is not None and polymarket_category_scale > 0:
+                poly_min_day, poly_max_day = self.repository.get_platform_date_bounds("polymarket")
+                min_candidates = [value for value in (min_day, poly_min_day) if value is not None]
+                max_candidates = [value for value in (max_day, poly_max_day) if value is not None]
+                min_day = min(min_candidates) if min_candidates else None
+                max_day = max(max_candidates) if max_candidates else None
             if min_day is None or max_day is None:
                 points = []
             else:
@@ -57,7 +67,14 @@ class DashboardService:
             start_date = end_day - timedelta(days=day_count - 1)
             points = self._build_points(start_date, end_day, selected_categories)
 
-        polymarket_total = round(sum(point["polymarket"] for point in points), 2)
+        polymarket_scaled_series_used = False
+        if points and polymarket_category_scale is not None:
+            polymarket_scaled_series_used = self._overlay_polymarket_platform_series(
+                points,
+                scale=polymarket_category_scale,
+            )
+
+        polymarket_total = round(sum(self._series_value(point["polymarket"]) for point in points), 2)
         kalshi_total = round(sum(point["kalshi"] for point in points), 2)
         latest_day = self.repository.get_stats().get("latestDay")
         poly_recent_state = next(
@@ -69,18 +86,34 @@ class DashboardService:
             None,
         )
         if poly_recent_state and poly_recent_state["partial"]:
-            warnings.append(
-                "Polymarket daily trade history is partial because the public trades endpoint does not expose a full 90-day exchange-wide backfill."
-            )
-            snapshot_total = self.repository.get_snapshot_total(
-                platform="polymarket",
-                range_value=range_value,
-                categories=selected_categories,
-            )
-            if snapshot_total is not None and snapshot_total > polymarket_total:
-                polymarket_total = round(snapshot_total, 2)
+            if polymarket_scaled_series_used:
+                if selected_categories is None or polymarket_category_scale == 1:
+                    warnings.append(
+                        "Polymarket chart uses the public builder-volume daily series for platform-wide history."
+                    )
+                else:
+                    warnings.append(
+                        "Polymarket category filters use a proportional estimate: public builder-volume daily series scaled by selected-category metadata share."
+                    )
+            else:
                 warnings.append(
-                    "Polymarket total is supplemented from market metadata because public trade pagination is incomplete."
+                    "Polymarket has no materialized daily data for the selected categories in this range."
+                )
+        kalshi_recent_state = next(
+            (
+                state
+                for state in sync_states
+                if state["platform"] == "kalshi" and state["scope"] == "recent"
+            ),
+            None,
+        )
+        if kalshi_recent_state:
+            warnings.append(
+                "Kalshi daily series is derived from public candlestick volume over the materialized market registry."
+            )
+            if kalshi_recent_state["partial"]:
+                warnings.append(
+                    "Kalshi totals are materialized from the current registry subset; direct market pagination did not exhaust all open/settled markets."
                 )
         return VolumeResponse(
             range=range_value,
@@ -98,6 +131,70 @@ class DashboardService:
             ),
             points=points,
         ).model_dump()
+
+    def _should_use_polymarket_platform_series(self, categories: list[str] | None) -> bool:
+        if categories is None:
+            return True
+        platform_categories = set(self.repository.list_platform_categories("polymarket"))
+        return bool(platform_categories) and platform_categories.issubset(set(categories))
+
+    def _polymarket_category_scale(self, *, range_value: str, categories: list[str] | None) -> float | None:
+        if categories == []:
+            return 0.0
+        if self._should_use_polymarket_platform_series(categories):
+            return 1.0
+
+        snapshot_range = self._polymarket_snapshot_range_for_scale(range_value)
+        if snapshot_range is None:
+            return None
+        selected_total = self.repository.get_snapshot_total(
+            platform="polymarket",
+            range_value=snapshot_range,
+            categories=categories,
+        )
+        all_total = self.repository.get_snapshot_total(
+            platform="polymarket",
+            range_value=snapshot_range,
+            categories=None,
+        )
+        if all_total is None or all_total <= 0 or selected_total is None:
+            return None
+        return max(0.0, min(float(selected_total) / float(all_total), 1.0))
+
+    def _polymarket_snapshot_range_for_scale(self, range_value: str) -> str | None:
+        if range_value == "7d":
+            return "7d"
+        if range_value in {"30d", "90d"}:
+            return "30d"
+        if range_value == "all":
+            return "all"
+        return None
+
+    def _overlay_polymarket_platform_series(self, points: list[dict], *, scale: float) -> bool:
+        rows = self.repository.get_platform_volume_rows(
+            "polymarket",
+            points[0]["date"],
+            points[-1]["date"],
+        )
+        if not rows:
+            return False
+
+        if scale <= 0:
+            for point in points:
+                point["polymarket"] = 0.0
+                point["total"] = round(point["kalshi"], 2)
+            return True
+
+        by_day = {row["day_utc"]: round(float(row["turnover_usd"]), 2) for row in rows}
+        for point in points:
+            raw_value = by_day.get(point["date"])
+            polymarket_value = None if raw_value is None else round(raw_value * scale, 2)
+            point["polymarket"] = polymarket_value
+            point["total"] = round(self._series_value(polymarket_value) + point["kalshi"], 2)
+        return True
+
+    def _series_value(self, value: float | None) -> float:
+        return 0.0 if value is None else float(value)
 
     def _build_points(self, start_date: date, end_date: date, categories: list[str] | None) -> list[dict]:
         rows = self.repository.get_volume_rows(start_date.isoformat(), end_date.isoformat(), categories)

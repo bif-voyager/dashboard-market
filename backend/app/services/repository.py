@@ -52,6 +52,14 @@ class DailyVolumeRecord:
     trades_count: int = 0
 
 
+@dataclass(slots=True)
+class PlatformDailyVolumeRecord:
+    platform: str
+    day_utc: str
+    turnover_usd: float
+    source: str
+
+
 class Repository:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -313,6 +321,55 @@ class Repository:
 
         return len(aggregated)
 
+    def replace_platform_daily_volumes(
+        self,
+        *,
+        platform: str,
+        source: str,
+        start_day: str,
+        end_day: str,
+        records: Iterable[PlatformDailyVolumeRecord],
+    ) -> int:
+        prepared = list(records)
+        with self.database.write_lock, self.database.session() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                DELETE FROM platform_daily_volume
+                WHERE platform = ? AND source = ? AND day_utc >= ? AND day_utc <= ?
+                """,
+                (platform, source, start_day, end_day),
+            )
+
+            if not prepared:
+                return 0
+
+            aggregated: dict[str, float] = defaultdict(float)
+            for record in prepared:
+                aggregated[record.day_utc] += record.turnover_usd
+
+            now = datetime.now(UTC).isoformat()
+            connection.executemany(
+                """
+                INSERT INTO platform_daily_volume (
+                    day_utc,
+                    platform,
+                    turnover_usd,
+                    source,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(day_utc, platform, source) DO UPDATE SET
+                    turnover_usd = excluded.turnover_usd,
+                    updated_at = excluded.updated_at
+                """,
+                [
+                    (day_utc, platform, turnover_usd, source, now)
+                    for day_utc, turnover_usd in aggregated.items()
+                ],
+            )
+
+        return len(aggregated)
+
     def list_categories(self) -> list[dict]:
         with self.database.session() as connection:
             rows = connection.execute(
@@ -334,6 +391,30 @@ class Repository:
             }
             for row in rows
         ]
+
+    def list_platform_categories(self, platform: str) -> list[str]:
+        with self.database.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT normalized_category
+                FROM (
+                    SELECT normalized_category
+                    FROM daily_volume
+                    WHERE platform = ?
+                    UNION
+                    SELECT normalized_category
+                    FROM category_snapshot
+                    WHERE platform = ?
+                    UNION
+                    SELECT normalized_category
+                    FROM market_registry
+                    WHERE platform = ?
+                )
+                ORDER BY normalized_category ASC
+                """,
+                (platform, platform, platform),
+            ).fetchall()
+        return [row["normalized_category"] for row in rows]
 
     def get_snapshot_total(self, *, platform: str, range_value: str, categories: list[str] | None) -> float | None:
         column_by_range = {
@@ -360,6 +441,40 @@ class Repository:
             return None
         return float(row["total"] or 0.0)
 
+    def get_snapshot_breakdown(self, *, platform: str, categories: list[str] | None) -> dict[str, float] | None:
+        query = """
+            SELECT
+                COALESCE(SUM(volume_24h), 0) AS volume_24h,
+                COALESCE(SUM(volume_1wk), 0) AS volume_1wk,
+                COALESCE(SUM(volume_1mo), 0) AS volume_1mo,
+                COALESCE(SUM(volume_total), 0) AS volume_total
+            FROM category_snapshot
+            WHERE platform = ?
+        """
+        params: list[object] = [platform]
+        if categories is not None:
+            if not categories:
+                return {
+                    "volume_24h": 0.0,
+                    "volume_1wk": 0.0,
+                    "volume_1mo": 0.0,
+                    "volume_total": 0.0,
+                }
+            placeholders = ",".join("?" for _ in categories)
+            query += f" AND normalized_category IN ({placeholders})"
+            params.extend(categories)
+
+        with self.database.session() as connection:
+            row = connection.execute(query, params).fetchone()
+        if row is None:
+            return None
+        return {
+            "volume_24h": float(row["volume_24h"] or 0.0),
+            "volume_1wk": float(row["volume_1wk"] or 0.0),
+            "volume_1mo": float(row["volume_1mo"] or 0.0),
+            "volume_total": float(row["volume_total"] or 0.0),
+        }
+
     def get_volume_rows(self, start_day: str | None, end_day: str | None, categories: list[str] | None) -> list[dict]:
         query = """
             SELECT day_utc, platform, normalized_category, turnover_usd, trades_count
@@ -385,6 +500,20 @@ class Repository:
             rows = connection.execute(query, params).fetchall()
         return [dict(row) for row in rows]
 
+    def get_platform_volume_rows(self, platform: str, start_day: str, end_day: str) -> list[dict]:
+        with self.database.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT day_utc, platform, SUM(turnover_usd) AS turnover_usd
+                FROM platform_daily_volume
+                WHERE platform = ? AND day_utc >= ? AND day_utc <= ?
+                GROUP BY day_utc, platform
+                ORDER BY day_utc ASC
+                """,
+                (platform, start_day, end_day),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_date_bounds(self, categories: list[str] | None = None) -> tuple[str | None, str | None]:
         query = "SELECT MIN(day_utc) AS min_day, MAX(day_utc) AS max_day FROM daily_volume WHERE 1 = 1"
         params: list[str] = []
@@ -396,6 +525,20 @@ class Repository:
             params.extend(categories)
         with self.database.session() as connection:
             row = connection.execute(query, params).fetchone()
+        if row is None:
+            return None, None
+        return row["min_day"], row["max_day"]
+
+    def get_platform_date_bounds(self, platform: str) -> tuple[str | None, str | None]:
+        with self.database.session() as connection:
+            row = connection.execute(
+                """
+                SELECT MIN(day_utc) AS min_day, MAX(day_utc) AS max_day
+                FROM platform_daily_volume
+                WHERE platform = ?
+                """,
+                (platform,),
+            ).fetchone()
         if row is None:
             return None, None
         return row["min_day"], row["max_day"]
@@ -499,7 +642,15 @@ class Repository:
                     (SELECT COUNT(*) FROM market_registry) AS markets_count,
                     (SELECT COUNT(*) FROM seen_trade) AS trades_count,
                     (SELECT COUNT(*) FROM daily_volume) AS daily_rows_count,
-                    (SELECT MAX(day_utc) FROM daily_volume) AS latest_day
+                    (SELECT COUNT(*) FROM platform_daily_volume) AS platform_daily_rows_count,
+                    (
+                        SELECT MAX(day_utc)
+                        FROM (
+                            SELECT day_utc FROM daily_volume
+                            UNION ALL
+                            SELECT day_utc FROM platform_daily_volume
+                        )
+                    ) AS latest_day
                 """
             ).fetchone()
         if row is None:
@@ -507,11 +658,13 @@ class Repository:
                 "marketsCount": 0,
                 "tradesCount": 0,
                 "dailyRowsCount": 0,
+                "platformDailyRowsCount": 0,
                 "latestDay": None,
             }
         return {
             "marketsCount": row["markets_count"],
             "tradesCount": row["trades_count"],
             "dailyRowsCount": row["daily_rows_count"],
+            "platformDailyRowsCount": row["platform_daily_rows_count"],
             "latestDay": row["latest_day"],
         }

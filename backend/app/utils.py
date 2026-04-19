@@ -27,6 +27,186 @@ CATEGORY_ALIASES = {
     "mentions": "mentions",
 }
 
+POLYMARKET_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    (
+        "sports",
+        (
+            "nba",
+            "nfl",
+            "mlb",
+            "nhl",
+            "stanley cup",
+            "world series",
+            "super bowl",
+            "champions league",
+            "premier league",
+            "finals",
+            "playoffs",
+            "tournament",
+            "grand prix",
+            "match",
+            "goal",
+            "touchdown",
+            "tennis",
+            "soccer",
+            "baseball",
+            "basketball",
+            "football",
+            "hurricanes win",
+            "oilers win",
+            "knicks win",
+        ),
+    ),
+    (
+        "crypto",
+        (
+            "bitcoin",
+            "btc",
+            "ethereum",
+            "eth",
+            "solana",
+            "xrp",
+            "dogecoin",
+            "crypto",
+            "memecoin",
+            "token",
+            "airdrop",
+        ),
+    ),
+    (
+        "politics",
+        (
+            "trump",
+            "election",
+            "president",
+            "senate",
+            "house of representatives",
+            "congress",
+            "governor",
+            "mayor",
+            "white house",
+            "democrat",
+            "republican",
+            "cabinet",
+            "prime minister",
+            "parliament",
+            "impeach",
+        ),
+    ),
+    (
+        "world",
+        (
+            "russia",
+            "ukraine",
+            "ceasefire",
+            "china",
+            "taiwan",
+            "israel",
+            "gaza",
+            "iran",
+            "nato",
+            "war",
+            "invasion",
+            "world leader",
+        ),
+    ),
+    (
+        "economics",
+        (
+            "inflation",
+            "cpi",
+            "gdp",
+            "recession",
+            "unemployment",
+            "rate cut",
+            "interest rate",
+            "fed",
+            "fomc",
+            "tariff",
+            "yield",
+            "treasury",
+        ),
+    ),
+    (
+        "companies",
+        (
+            "apple",
+            "microsoft",
+            "amazon",
+            "google",
+            "meta",
+            "tesla",
+            "nvidia",
+            "netflix",
+            "uber",
+            "openai",
+            "bytedance",
+            "tiktok",
+            "spacex",
+        ),
+    ),
+    (
+        "science-and-technology",
+        (
+            "ai",
+            "gpt",
+            "chatgpt",
+            "model release",
+            "launch",
+            "space",
+            "rocket",
+            "starship",
+            "technology",
+            "scientist",
+        ),
+    ),
+    (
+        "entertainment",
+        (
+            "album",
+            "movie",
+            "box office",
+            "oscar",
+            "grammy",
+            "emmy",
+            "celebrity",
+            "rihanna",
+            "playboi carti",
+            "drake",
+            "taylor swift",
+            "gta",
+            "season finale",
+            "tv show",
+        ),
+    ),
+    (
+        "health",
+        (
+            "covid",
+            "pandemic",
+            "vaccine",
+            "fda",
+            "measles",
+            "bird flu",
+            "flu",
+            "virus",
+        ),
+    ),
+    (
+        "climate-and-weather",
+        (
+            "weather",
+            "temperature",
+            "hurricane",
+            "storm",
+            "rainfall",
+            "snowfall",
+            "heatwave",
+            "climate",
+        ),
+    ),
+]
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -60,6 +240,32 @@ def normalize_category(raw: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "-", lowered).strip("-") or "uncategorized"
 
 
+def infer_polymarket_category(
+    *,
+    raw_category: str | None,
+    title: str | None = None,
+    slug: str | None = None,
+    event_title: str | None = None,
+    event_slug: str | None = None,
+) -> str:
+    normalized = normalize_category(raw_category)
+    if normalized != "uncategorized":
+        return normalized
+
+    haystack = " ".join(
+        part.strip().lower()
+        for part in (title or "", slug or "", event_title or "", event_slug or "")
+        if part and part.strip()
+    )
+    if not haystack:
+        return "uncategorized"
+
+    for category, keywords in POLYMARKET_CATEGORY_KEYWORDS:
+        if any(keyword in haystack for keyword in keywords):
+            return category
+    return "uncategorized"
+
+
 def display_category(slug: str) -> str:
     if slug == "uncategorized":
         return "Uncategorized"
@@ -79,17 +285,15 @@ def quantize_money(value: Decimal) -> Decimal:
 
 
 def polymarket_turnover_usd(trade: dict) -> Decimal:
-    return quantize_money(to_decimal(trade.get("size")) * to_decimal(trade.get("price")))
+    return quantize_money(to_decimal(trade.get("size")))
 
 
 def kalshi_turnover_usd(trade: dict) -> Decimal:
-    price_key = "yes_price_dollars" if str(trade.get("taker_side", "")).lower() == "yes" else "no_price_dollars"
-    return quantize_money(to_decimal(trade.get("count_fp")) * to_decimal(trade.get(price_key)))
+    return quantize_money(to_decimal(trade.get("count_fp")))
 
 
 def kalshi_candlestick_turnover_usd(candlestick: dict) -> Decimal:
-    price = to_decimal((candlestick.get("price") or {}).get("mean_dollars"))
-    return quantize_money(to_decimal(candlestick.get("volume_fp")) * price)
+    return quantize_money(to_decimal(candlestick.get("volume_fp")))
 
 
 def stable_trade_key(*parts: object) -> str:

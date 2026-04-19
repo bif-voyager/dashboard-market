@@ -5,10 +5,11 @@ from collections import defaultdict
 
 from app.clients.base import PublicApiClient, UpstreamError
 from app.config import Settings
-from app.services.repository import CategorySnapshotRecord, MarketRecord, TradeRecord
+from app.services.repository import CategorySnapshotRecord, MarketRecord, PlatformDailyVolumeRecord, TradeRecord
 from app.utils import (
     coerce_timestamp,
     day_from_timestamp,
+    infer_polymarket_category,
     normalize_category,
     polymarket_turnover_usd,
     stable_trade_key,
@@ -46,6 +47,39 @@ class PolymarketAdapter:
             records, snapshots, pagination = await self._fetch_markets_offset(max_pages=max_pages, limit=limit)
         return records, snapshots, pagination
 
+    async def sync_builder_daily_volume(self) -> tuple[list[PlatformDailyVolumeRecord], dict]:
+        payload = await self.data_client.get_json(
+            "/v1/builders/volume",
+            params={"timePeriod": "DAY", "limit": 5000},
+        )
+        rows = payload.get("value", []) if isinstance(payload, dict) else payload
+        by_day: defaultdict[str, float] = defaultdict(float)
+        raw_rows = 0
+        for row in rows:
+            raw_rows += 1
+            day_value = row.get("dt")
+            if not day_value:
+                continue
+            by_day[str(day_value)[:10]] += float(row.get("volume") or 0)
+
+        records = [
+            PlatformDailyVolumeRecord(
+                platform="polymarket",
+                day_utc=day,
+                turnover_usd=round(volume, 2),
+                source="builder-volume",
+            )
+            for day, volume in sorted(by_day.items())
+        ]
+        return records, {
+            "source": "builder-volume",
+            "rawRows": raw_rows,
+            "days": len(records),
+            "minDay": records[0].day_utc if records else None,
+            "maxDay": records[-1].day_utc if records else None,
+            "partial": not records,
+        }
+
     async def _fetch_markets_keyset(
         self,
         *,
@@ -59,36 +93,44 @@ class PolymarketAdapter:
         first_market_id: str | None = None
         stalled = False
         cursor: str | None = None
+        page_count = 0
 
         for page in range(max_pages):
             params: dict[str, str | int] = {"limit": limit}
             if cursor:
-                params["next_cursor"] = cursor
+                params["after_cursor"] = cursor
             payload = await self.gamma_client.get_json("/markets/keyset", params=params)
             markets = payload.get("markets", [])
             if not markets:
                 break
+            page_count += 1
             if page == 0:
                 first_market_id = str(markets[0].get("id"))
             elif first_market_id is not None and str(markets[0].get("id")) == first_market_id:
                 stalled = True
                 records.clear()
                 break
-
-            records.extend(
-                MarketRecord(
-                    platform="polymarket",
-                    market_key=str(market.get("conditionId")),
-                    title=market.get("question"),
-                    raw_category=market.get("category"),
-                    normalized_category=normalize_category(market.get("category")),
-                    source="gamma-keyset",
-                )
-                for market in markets
-                if market.get("conditionId")
-            )
             for market in markets:
-                category = normalize_category(market.get("category"))
+                events = market.get("events") or []
+                primary_event = events[0] if events else {}
+                category = infer_polymarket_category(
+                    raw_category=market.get("category"),
+                    title=market.get("question"),
+                    slug=market.get("slug"),
+                    event_title=primary_event.get("title"),
+                    event_slug=primary_event.get("slug"),
+                )
+                if market.get("conditionId"):
+                    records.append(
+                        MarketRecord(
+                            platform="polymarket",
+                            market_key=str(market.get("conditionId")),
+                            title=market.get("question"),
+                            raw_category=market.get("category"),
+                            normalized_category=category,
+                            source="gamma-keyset",
+                        )
+                    )
                 category_snapshot[category]["volume_24h"] += float(market.get("volume24hr") or 0)
                 category_snapshot[category]["volume_1wk"] += float(market.get("volume1wk") or 0)
                 category_snapshot[category]["volume_1mo"] += float(market.get("volume1mo") or 0)
@@ -111,7 +153,7 @@ class PolymarketAdapter:
                 )
                 for category, values in category_snapshot.items()
             ],
-            {"mode": "keyset", "pages": max_pages if stalled else None, "stalled": stalled},
+            {"mode": "keyset", "pages": page_count, "stalled": stalled},
         )
 
     async def _fetch_markets_offset(
@@ -131,20 +173,27 @@ class PolymarketAdapter:
             )
             if not payload:
                 break
-            records.extend(
-                MarketRecord(
-                    platform="polymarket",
-                    market_key=str(market.get("conditionId")),
-                    title=market.get("question"),
-                    raw_category=market.get("category"),
-                    normalized_category=normalize_category(market.get("category")),
-                    source="gamma-offset",
-                )
-                for market in payload
-                if market.get("conditionId")
-            )
             for market in payload:
-                category = normalize_category(market.get("category"))
+                events = market.get("events") or []
+                primary_event = events[0] if events else {}
+                category = infer_polymarket_category(
+                    raw_category=market.get("category"),
+                    title=market.get("question"),
+                    slug=market.get("slug"),
+                    event_title=primary_event.get("title"),
+                    event_slug=primary_event.get("slug"),
+                )
+                if market.get("conditionId"):
+                    records.append(
+                        MarketRecord(
+                            platform="polymarket",
+                            market_key=str(market.get("conditionId")),
+                            title=market.get("question"),
+                            raw_category=market.get("category"),
+                            normalized_category=category,
+                            source="gamma-offset",
+                        )
+                    )
                 category_snapshot[category]["volume_24h"] += float(market.get("volume24hr") or 0)
                 category_snapshot[category]["volume_1wk"] += float(market.get("volume1wk") or 0)
                 category_snapshot[category]["volume_1mo"] += float(market.get("volume1mo") or 0)

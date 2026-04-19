@@ -136,6 +136,136 @@ class KalshiAdapter:
 
         return records, {"pages": page_count}
 
+    async def sync_recent_direct_market_registry(
+        self,
+        *,
+        event_to_series: dict[str, str],
+        event_to_category: dict[str, str],
+        series_categories: dict[str, str],
+    ) -> tuple[list[MarketRecord], dict]:
+        end_at = utc_now()
+        start_at = end_at - timedelta(days=90)
+        max_pages = self.settings.kalshi_direct_market_recent_max_pages
+        records_by_ticker: dict[str, MarketRecord] = {}
+        stats = {
+            "statuses": {},
+            "marketsScanned": 0,
+            "volumePositiveMarkets": 0,
+            "pages": 0,
+            "partial": False,
+        }
+
+        query_specs: list[tuple[str, dict[str, str | int]]] = [
+            ("open", {"status": "open"}),
+            (
+                "closed",
+                {
+                    "status": "closed",
+                    "min_close_ts": int(start_at.timestamp()),
+                    "max_close_ts": int(end_at.timestamp()),
+                },
+            ),
+            (
+                "settled",
+                {
+                    "status": "settled",
+                    "min_settled_ts": int(start_at.timestamp()),
+                    "max_settled_ts": int(end_at.timestamp()),
+                },
+            ),
+        ]
+
+        for status_key, base_params in query_specs:
+            status_records, status_stats = await self._fetch_direct_markets(
+                base_params=base_params,
+                max_pages=max_pages,
+                event_to_series=event_to_series,
+                event_to_category=event_to_category,
+                series_categories=series_categories,
+            )
+            for record in status_records:
+                current = records_by_ticker.get(record.market_key)
+                if current is None or (
+                    current.normalized_category == "uncategorized"
+                    and record.normalized_category != "uncategorized"
+                ):
+                    records_by_ticker[record.market_key] = record
+            stats["statuses"][status_key] = status_stats
+            stats["marketsScanned"] += status_stats["marketsScanned"]
+            stats["volumePositiveMarkets"] += status_stats["volumePositiveMarkets"]
+            stats["pages"] += status_stats["pages"]
+            stats["partial"] = bool(stats["partial"]) or bool(status_stats["partial"])
+
+        stats["records"] = len(records_by_ticker)
+        return list(records_by_ticker.values()), stats
+
+    async def _fetch_direct_markets(
+        self,
+        *,
+        base_params: dict[str, str | int],
+        max_pages: int,
+        event_to_series: dict[str, str],
+        event_to_category: dict[str, str],
+        series_categories: dict[str, str],
+    ) -> tuple[list[MarketRecord], dict]:
+        cursor: str | None = None
+        page_count = 0
+        records: list[MarketRecord] = []
+        markets_scanned = 0
+        volume_positive = 0
+
+        for _ in range(max_pages):
+            params = {"limit": 1000, **base_params}
+            if cursor:
+                params["cursor"] = cursor
+            payload = await self.client.get_json("/markets", params=params)
+            markets = payload.get("markets", [])
+            if not markets:
+                break
+            page_count += 1
+            markets_scanned += len(markets)
+            for market in markets:
+                ticker = market.get("ticker")
+                if not ticker:
+                    continue
+                volume_fp = float(market.get("volume_fp") or 0)
+                volume_24h_fp = float(market.get("volume_24h_fp") or 0)
+                if volume_fp <= 0 and volume_24h_fp <= 0:
+                    continue
+
+                volume_positive += 1
+                event_key = str(market.get("event_ticker")) if market.get("event_ticker") else None
+                series_key = event_to_series.get(event_key or "")
+                category = (
+                    series_categories.get(series_key or "")
+                    or event_to_category.get(event_key or "")
+                    or "uncategorized"
+                )
+                records.append(
+                    MarketRecord(
+                        platform="kalshi",
+                        market_key=str(ticker),
+                        event_key=event_key,
+                        series_key=series_key,
+                        title=market.get("title"),
+                        raw_category=category,
+                        normalized_category=category,
+                        source=f"markets-{base_params.get('status')}",
+                    )
+                )
+
+            cursor = payload.get("cursor")
+            if not cursor:
+                break
+
+        return records, {
+            "pages": page_count,
+            "marketsScanned": markets_scanned,
+            "volumePositiveMarkets": volume_positive,
+            "records": len(records),
+            "partial": bool(cursor),
+        }
+
     async def fetch_event_maps(self, scope: str, series_categories: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
         cursor: str | None = None
         event_to_series: dict[str, str] = {}
@@ -181,6 +311,7 @@ class KalshiAdapter:
                 "candlesProcessed": 0,
                 "startDay": end_day,
                 "endDay": end_day,
+                "periodIntervalMinutes": 1440,
                 "partial": False,
             }
 
@@ -201,6 +332,7 @@ class KalshiAdapter:
             "candlesProcessed": 0,
             "startDay": start_day.isoformat(),
             "endDay": end_day.isoformat(),
+            "periodIntervalMinutes": 1440,
             "partial": False,
             "failedChunks": 0,
             "failedTickers": [],

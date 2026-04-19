@@ -35,7 +35,7 @@ class HealthResponse(BaseModel):
 
 class VolumePoint(BaseModel):
     date: str
-    polymarket: float
+    polymarket: float | None = None
     kalshi: float
     total: float
 
@@ -64,4 +64,3 @@ class SyncResponse(BaseModel):
     status: str
     partial: bool = False
     results: dict[str, dict]
-

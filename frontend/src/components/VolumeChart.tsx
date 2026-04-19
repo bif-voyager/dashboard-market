@@ -12,9 +12,13 @@ import { formatCompactCurrency, formatCurrency, formatDateLabel } from "../lib/f
 
 interface VolumeChartProps {
   data: VolumePoint[];
+  visiblePlatforms: {
+    polymarket: boolean;
+    kalshi: boolean;
+  };
 }
 
-export function VolumeChart({ data }: VolumeChartProps) {
+export function VolumeChart({ data, visiblePlatforms }: VolumeChartProps) {
   return (
     <div className="chart-shell">
       <ResponsiveContainer width="100%" height={380}>
@@ -42,7 +46,10 @@ export function VolumeChart({ data }: VolumeChartProps) {
               boxShadow: "0 20px 50px rgba(32, 42, 53, 0.12)",
               background: "rgba(255,255,255,0.95)",
             }}
-            formatter={(value: number, name: string) => [formatCurrency(value), name === "polymarket" ? "Polymarket" : "Kalshi"]}
+            formatter={(value: unknown, name: string) => [
+              typeof value === "number" ? formatCurrency(value) : "No data",
+              name === "polymarket" ? "Polymarket" : "Kalshi",
+            ]}
             labelFormatter={(label: string) =>
               new Date(`${label}T00:00:00Z`).toLocaleDateString("en-US", {
                 weekday: "short",
@@ -58,6 +65,8 @@ export function VolumeChart({ data }: VolumeChartProps) {
             stroke="#0d9488"
             strokeWidth={3}
             dot={false}
+            connectNulls={false}
+            hide={!visiblePlatforms.polymarket}
             activeDot={{ r: 5, fill: "#0d9488" }}
           />
           <Line
@@ -66,6 +75,7 @@ export function VolumeChart({ data }: VolumeChartProps) {
             stroke="#c2410c"
             strokeWidth={3}
             dot={false}
+            hide={!visiblePlatforms.kalshi}
             activeDot={{ r: 5, fill: "#c2410c" }}
           />
         </LineChart>

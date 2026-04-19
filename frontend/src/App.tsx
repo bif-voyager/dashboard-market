@@ -18,6 +18,10 @@ function App() {
   const queryClient = useQueryClient();
   const [range, setRange] = useState<RangeValue>("30d");
   const [selectedCategories, setSelectedCategories] = useState<string[] | null>(null);
+  const [visiblePlatforms, setVisiblePlatforms] = useState({
+    polymarket: true,
+    kalshi: true,
+  });
 
   const categoriesQuery = useQuery({
     queryKey: ["categories"],
@@ -50,7 +54,13 @@ function App() {
   const selected = selectedCategories ?? [];
   const hasSelection = selectedCategories !== null && selected.length > 0;
   const volume = volumeQuery.data;
-  const hasNonZeroPoints = Boolean(volume?.points.some((point) => point.total > 0));
+  const hasNonZeroPoints = Boolean(
+    volume?.points.some((point) => {
+      const polymarketValue = visiblePlatforms.polymarket ? (point.polymarket ?? 0) : 0;
+      const kalshiValue = visiblePlatforms.kalshi ? point.kalshi : 0;
+      return polymarketValue + kalshiValue > 0;
+    }),
+  );
   const initialLoading = categoriesQuery.isLoading || selectedCategories === null;
   const hardError = categoriesQuery.error ?? (!volume && volumeQuery.error ? volumeQuery.error : null);
 
@@ -72,6 +82,17 @@ function App() {
     setSelectedCategories(categories.map((item) => item.slug));
   }
 
+  function togglePlatform(platform: "polymarket" | "kalshi") {
+    const otherPlatform = platform === "polymarket" ? "kalshi" : "polymarket";
+    if (visiblePlatforms[platform] && !visiblePlatforms[otherPlatform]) {
+      return;
+    }
+    setVisiblePlatforms((current) => ({
+      ...current,
+      [platform]: !current[platform],
+    }));
+  }
+
   return (
     <main className="page-shell">
       <div className="page-shell__glow page-shell__glow--left" />
@@ -80,9 +101,9 @@ function App() {
       <section className="hero-card">
         <div>
           <span className="eyebrow">Hiring-test ready dashboard</span>
-          <h1>Historical market turnover across Polymarket and Kalshi</h1>
+          <h1>Historical market volume across Polymarket and Kalshi</h1>
           <p className="hero-copy">
-            Read-only analytics on top of public market-data APIs, normalized into one UTC daily volume view.
+            Read-only analytics on top of public market-data APIs, normalized into one UTC daily market-volume view.
           </p>
         </div>
 
@@ -93,13 +114,6 @@ function App() {
             disabled={syncMutation.isPending}
           >
             {syncMutation.isPending ? "Syncing..." : "Refresh data"}
-          </button>
-          <button
-            className="action-button action-button--ghost"
-            onClick={() => syncMutation.mutate("all")}
-            disabled={syncMutation.isPending}
-          >
-            Backfill all time
           </button>
           <a
             className="action-button action-button--ghost"
@@ -201,8 +215,8 @@ function App() {
       {!initialLoading && hasSelection && volume ? (
         <>
           <section className="metrics-grid">
-            <MetricCard title="Polymarket turnover" value={formatCurrency(volume.totals.polymarket)} tone="sea" />
-            <MetricCard title="Kalshi turnover" value={formatCurrency(volume.totals.kalshi)} tone="ember" />
+            <MetricCard title="Polymarket volume" value={formatCurrency(volume.totals.polymarket)} tone="sea" />
+            <MetricCard title="Kalshi volume" value={formatCurrency(volume.totals.kalshi)} tone="ember" />
             <MetricCard title="Difference" value={formatCurrency(volume.totals.difference)} tone="ink" />
           </section>
 
@@ -210,11 +224,25 @@ function App() {
             <div className="chart-card__header">
               <div>
                 <span className="eyebrow">Combined view</span>
-                <h2>Daily executed turnover in USD</h2>
+                <h2>Daily market volume in USD notional</h2>
               </div>
               <div className="legend-row">
-                <span className="legend-chip legend-chip--sea">Polymarket</span>
-                <span className="legend-chip legend-chip--ember">Kalshi</span>
+                <button
+                  className={visiblePlatforms.polymarket ? "legend-chip legend-chip--sea" : "legend-chip legend-chip--muted"}
+                  onClick={() => togglePlatform("polymarket")}
+                  aria-pressed={visiblePlatforms.polymarket}
+                  type="button"
+                >
+                  Polymarket
+                </button>
+                <button
+                  className={visiblePlatforms.kalshi ? "legend-chip legend-chip--ember" : "legend-chip legend-chip--muted"}
+                  onClick={() => togglePlatform("kalshi")}
+                  aria-pressed={visiblePlatforms.kalshi}
+                  type="button"
+                >
+                  Kalshi
+                </button>
               </div>
             </div>
 
@@ -223,11 +251,11 @@ function App() {
             ) : null}
 
             {hasNonZeroPoints ? (
-              <VolumeChart data={volume.points} />
+              <VolumeChart data={volume.points} visiblePlatforms={visiblePlatforms} />
             ) : (
               <StatePanel
-                title="No trades found"
-                body="There are no executed trades for the chosen categories in this range yet."
+                title="No volume found"
+                body="There is no materialized market volume for the chosen categories and visible platforms in this range yet."
               />
             )}
           </section>

@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     poly_page_limit: int = 500
     poly_recent_max_pages: int = 3
     poly_bootstrap_max_pages: int = 3
-    poly_metadata_recent_max_pages: int = 20
+    poly_metadata_recent_max_pages: int = 120
     poly_metadata_bootstrap_max_pages: int = 120
 
     kalshi_base_url: str = "https://api.elections.kalshi.com/trade-api/v2"
@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     kalshi_bootstrap_max_pages: int = 120
     kalshi_event_recent_max_pages: int = 18
     kalshi_event_bootstrap_max_pages: int = 180
+    kalshi_direct_market_recent_max_pages: int = 120
+    kalshi_direct_market_bootstrap_max_pages: int = 300
     kalshi_historical_market_recent_max_pages: int = 18
     kalshi_historical_market_bootstrap_max_pages: int = 180
     kalshi_candlestick_chunk_size: int = 100

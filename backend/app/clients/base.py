@@ -50,4 +50,8 @@ class PublicApiClient:
                     await asyncio.sleep((0.4 * (2 ** (attempt - 1))) + random.uniform(0.1, 0.35))
                     continue
                 raise UpstreamError(self.source, 0, f"{self.source} request failed for {path}") from exc
-
+            except Exception as exc:  # pragma: no cover - defensive network guard
+                if attempt < 4:
+                    await asyncio.sleep((0.4 * (2 ** (attempt - 1))) + random.uniform(0.1, 0.35))
+                    continue
+                raise UpstreamError(self.source, 0, f"{self.source} request failed for {path}") from exc

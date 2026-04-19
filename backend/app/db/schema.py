@@ -47,6 +47,18 @@ CREATE TABLE IF NOT EXISTS daily_volume (
 CREATE INDEX IF NOT EXISTS idx_daily_volume_day
 ON daily_volume (day_utc);
 
+CREATE TABLE IF NOT EXISTS platform_daily_volume (
+    day_utc TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    turnover_usd REAL NOT NULL,
+    source TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (day_utc, platform, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_platform_daily_volume_platform_day
+ON platform_daily_volume (platform, day_utc);
+
 CREATE TABLE IF NOT EXISTS sync_state (
     platform TEXT NOT NULL,
     scope TEXT NOT NULL,

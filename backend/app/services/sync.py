@@ -83,12 +83,42 @@ class SyncService:
                 stats=result,
             )
             return result
+        except Exception as exc:  # pragma: no cover - defensive sync guard
+            result = {
+                "platform": platform,
+                "status": "error",
+                "partial": True,
+                "message": str(exc),
+                "startedAt": datetime.now(UTC).isoformat(),
+                "finishedAt": datetime.now(UTC).isoformat(),
+            }
+            self.repository.set_sync_state(
+                platform=platform,
+                scope=scope,
+                status="error",
+                started_at=result["startedAt"],
+                finished_at=result["finishedAt"],
+                partial=True,
+                message=result["message"],
+                stats=result,
+            )
+            return result
 
     async def _sync_polymarket(self, scope: str) -> dict:
         started_at = datetime.now(UTC).isoformat()
         market_records, category_snapshots, market_stats = await self.polymarket.sync_markets(scope)
         markets_upserted = self.repository.upsert_markets(market_records)
         snapshots_upserted = self.repository.upsert_category_snapshots(category_snapshots)
+        platform_daily_records, platform_daily_stats = await self.polymarket.sync_builder_daily_volume()
+        platform_daily_rows_replaced = 0
+        if platform_daily_records:
+            platform_daily_rows_replaced = self.repository.replace_platform_daily_volumes(
+                platform="polymarket",
+                source="builder-volume",
+                start_day=platform_daily_records[0].day_utc,
+                end_day=platform_daily_records[-1].day_utc,
+                records=platform_daily_records,
+            )
 
         def category_lookup(market_key: str) -> str | None:
             return self.repository.get_market_category("polymarket", market_key)
@@ -104,10 +134,12 @@ class SyncService:
             "finishedAt": finished_at,
             "marketsUpserted": markets_upserted,
             "snapshotsUpserted": snapshots_upserted,
+            "platformDailyRowsReplaced": platform_daily_rows_replaced,
             "tradesProcessed": len(trade_records),
             "tradesInserted": trades_inserted,
-            "partial": bool(trade_stats.get("partial")),
+            "partial": bool(trade_stats.get("partial")) or bool(platform_daily_stats.get("partial")),
             "marketStats": market_stats,
+            "platformDailyStats": platform_daily_stats,
             "tradeStats": trade_stats,
         }
 
@@ -122,13 +154,24 @@ class SyncService:
             event_to_series,
             event_to_category,
         )
-        markets_upserted = self.repository.upsert_markets(live_market_records + historical_market_records)
+        direct_market_records = []
+        direct_stats = {"pages": 0, "partial": False}
+        if scope == "recent":
+            direct_market_records, direct_stats = await self.kalshi.sync_recent_direct_market_registry(
+                event_to_series=event_to_series,
+                event_to_category=event_to_category,
+                series_categories=series_categories,
+            )
+
+        market_records = direct_market_records + historical_market_records + live_market_records
+        markets_upserted = self.repository.upsert_markets(market_records)
 
         if scope == "recent":
-            ticker_categories = {
-                record.market_key: record.normalized_category
-                for record in live_market_records + historical_market_records
-            }
+            ticker_categories: dict[str, str] = {}
+            for record in market_records:
+                current = ticker_categories.get(record.market_key)
+                if current is None or (current == "uncategorized" and record.normalized_category != "uncategorized"):
+                    ticker_categories[record.market_key] = record.normalized_category
             daily_records, candle_stats = await self.kalshi.sync_recent_candles(ticker_categories)
             start_day = (utc_now().date() - timedelta(days=89)).isoformat()
             end_day = utc_now().date().isoformat()
@@ -147,10 +190,11 @@ class SyncService:
                 "finishedAt": finished_at,
                 "marketsUpserted": markets_upserted,
                 "dailyRowsReplaced": daily_rows_replaced,
-                "partial": bool(candle_stats.get("partial")),
+                "partial": bool(candle_stats.get("partial")) or bool(direct_stats.get("partial")),
                 "seriesCount": len(series_categories),
                 "liveMarketStats": live_stats,
                 "historicalMarketStats": historical_stats,
+                "directMarketStats": direct_stats,
                 "candleStats": candle_stats,
             }
 
