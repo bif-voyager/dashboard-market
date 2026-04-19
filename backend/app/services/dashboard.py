@@ -89,7 +89,7 @@ class DashboardService:
             if polymarket_scaled_series_used:
                 if selected_categories is None or polymarket_category_scale == 1:
                     warnings.append(
-                        "Polymarket chart uses the public builder-volume daily series for platform-wide history."
+                        "Polymarket chart uses the public builder-volume daily series as a public proxy; it is not guaranteed full exchange-wide volume."
                     )
                 else:
                     warnings.append(

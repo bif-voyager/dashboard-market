@@ -22,8 +22,9 @@ This project now uses one stable metric and does not keep changing it:
 Current source paths:
 
 - `Polymarket`:
-  - Platform-wide daily chart series comes from public `GET /v1/builders/volume?timePeriod=DAY`, aggregated by UTC day across returned builders.
-  - Category-filtered Polymarket chart series is estimated by scaling that public platform-wide daily series by the selected categories' metadata share for the chosen range.
+  - Daily chart series comes from public `GET /v1/builders/volume?timePeriod=DAY`, aggregated by UTC day across returned builders.
+  - This is a public builder-attributed volume proxy, not a guaranteed full exchange-wide warehouse.
+  - Category-filtered Polymarket chart series is estimated by scaling that public daily series by the selected categories' metadata share for the chosen range.
   - Category-filtered Polymarket daily history remains limited to materialized public trades because the public trade endpoint does not expose a clean full historical category backfill.
 - `Kalshi`:
   - Recent daily series comes from public candlestick `volume_fp`, aggregated by UTC day across the materialized market registry.
@@ -34,7 +35,7 @@ Current source paths:
 This submission is designed to be **finished and explainable**, not to be a perfect historical ingestion system.
 
 - `Polymarket` public trade history is partial. The public `/trades` endpoint does not expose a clean full exchange-wide category backfill.
-- `Polymarket` platform-wide chart history uses public builder-volume data. It is real data from a public Polymarket endpoint, but it should be read as the returned builder-volume series, not a guaranteed canonical exchange warehouse.
+- `Polymarket` chart history uses public builder-volume data. It is real data from a public Polymarket endpoint, but it should be read as builder-attributed volume, not a guaranteed canonical exchange-wide warehouse.
 - `Polymarket` category filters are proportional estimates over the platform-wide builder-volume series, using category shares from public market metadata. They are consistent on the chart and cards, but they are not exact raw category trade history.
 - `Kalshi` recent data is materialized from public market registry + candlestick volume. It is stable for the demo, but it is still limited by public API pagination and the local cache.
 - `All time` means **whatever history is currently materialized in local SQLite**, not guaranteed full platform history.
@@ -111,7 +112,7 @@ Current automated coverage is intentionally small and focuses on:
 ## Known limitations
 
 - Polymarket category-filtered daily history is partial from public trades alone.
-- Polymarket platform-wide daily chart history is sourced from public builder-volume data.
+- Polymarket daily chart history is sourced from public builder-volume data, which is a proxy rather than guaranteed full exchange volume.
 - Polymarket category-filtered daily chart history is a proportional estimate from builder-volume daily data and metadata category shares.
 - Kalshi recent volume is based on candlestick `volume_fp`, not a full raw-trade reconstruction.
 - Category normalization is intentionally string-based, not a full cross-platform ontology.
