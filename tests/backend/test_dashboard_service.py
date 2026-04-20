@@ -299,3 +299,46 @@ def test_kalshi_all_time_quality_uses_all_backfill_metadata(tmp_path: Path) -> N
 
     assert payload["dataQuality"]["kalshi"]["coverage"] == "unknown"
     assert "capped raw public trade backfill" in payload["dataQuality"]["kalshi"]["sourceLabel"]
+
+
+def test_partial_daily_upsert_preserves_existing_kalshi_history(tmp_path: Path) -> None:
+    database = Database(str(tmp_path / "dashboard.db"))
+    repository = Repository(database)
+    service = DashboardService(repository)
+
+    repository.replace_daily_volumes(
+        platform="kalshi",
+        start_day="2026-01-01",
+        end_day="2026-01-02",
+        records=[
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-01-01",
+                normalized_category="politics",
+                turnover_usd=100.0,
+            ),
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-01-02",
+                normalized_category="politics",
+                turnover_usd=200.0,
+            ),
+        ],
+    )
+
+    repository.upsert_daily_volumes(
+        platform="kalshi",
+        records=[
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-01-02",
+                normalized_category="sports",
+                turnover_usd=50.0,
+            )
+        ],
+    )
+
+    payload = service.build_volume_response(range_value="all", categories=None)
+
+    assert payload["points"][0]["kalshi"] == 100.0
+    assert payload["points"][1]["kalshi"] == 250.0

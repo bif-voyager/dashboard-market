@@ -20,6 +20,9 @@ export const translations = {
     showingCachedData: "Showing cached data. One of the upstream syncs last failed, so the chart may be partially stale.",
     partialHistory:
       "Some source history is partial. The chart uses the local cache plus any provider metadata that is safe to apply.",
+    chartDataNote: "Some history may be incomplete because of public API limits.",
+    dataQualityNotice:
+      "Data is partially incomplete. Polymarket uses a public approximate daily series, while Kalshi uses public daily candlesticks.",
     failedToLoad: "Failed to load dashboard data.",
     range: "Range",
     allTime: "All time",
@@ -43,6 +46,8 @@ export const translations = {
     notifications: "Notifications",
     noNotifications: "No notifications yet",
     notificationBell: "Open notifications",
+    darkTheme: "Turn on dark theme",
+    lightTheme: "Turn on light theme",
   },
   ru: {
     eyebrow: "Дашборд для тестового задания",
@@ -59,6 +64,9 @@ export const translations = {
       "Показаны кэшированные данные. Одна из синхронизаций с внешними источниками недавно завершилась с ошибкой, поэтому график может быть частично устаревшим.",
     partialHistory:
       "Часть истории неполная. График использует локальный кэш и безопасно применимые метаданные провайдеров.",
+    chartDataNote: "Часть истории может быть неполной из-за ограничений публичных API.",
+    dataQualityNotice:
+      "Данные частично неполные. Polymarket показан по публичной ориентировочной дневной серии, Kalshi — по публичным дневным свечам.",
     failedToLoad: "Не удалось загрузить данные дашборда.",
     range: "Диапазон",
     allTime: "Всё время",
@@ -82,6 +90,8 @@ export const translations = {
     notifications: "Уведомления",
     noNotifications: "Уведомлений пока нет",
     notificationBell: "Открыть уведомления",
+    darkTheme: "Включить тёмную тему",
+    lightTheme: "Включить светлую тему",
   },
 } satisfies Record<Language, Record<string, string>>;
 
@@ -135,4 +145,65 @@ export function translateWarning(message: string, language: Language): string {
   }
 
   return message;
+}
+
+const coverageLabelsRu: Record<string, string> = {
+  full: "ПОЛНО",
+  partial: "НЕПОЛНО",
+  unknown: "НЕЯСНО",
+};
+
+const dataQualityTextRu: Record<string, string> = {
+  "Polymarket public builder-volume proxy scaled by category metadata share":
+    "Ориентировочный объём Polymarket, пересчитанный по доле выбранных категорий",
+  "Public builder analytics do not expose exact exchange-wide daily category history.":
+    "Публичная аналитика не даёт точную дневную историю по категориям для всей биржи.",
+  "Polymarket public builder-volume platform proxy":
+    "Публичный ориентировочный объём Polymarket",
+  "Public builder analytics are real data but not guaranteed exchange-wide canonical volume.":
+    "Публичная аналитика основана на реальных данных, но не гарантирует точный общий объём всей биржи.",
+  "Polymarket sampled-trade aggregation from discovered event and market candidates":
+    "Сумма найденных сделок Polymarket по выбранным событиям и рынкам",
+  "Raw trades are synced from capped event and market samples rather than a full exchange-wide backfill.":
+    "Сырые сделки загружаются из ограниченной выборки событий и рынков, а не из полной истории всей биржи.",
+  "Kalshi recent candlestick rows extended backward by capped raw public trade backfill":
+    "Свежие свечи Kalshi, дополненные назад ограниченной загрузкой публичных сделок",
+  "Recent rows come from public market candlesticks; older rows are added from raw public trades over the Kalshi backfill window. ":
+    "Свежие дни берутся из публичных рыночных свечей; более старые дни добавлены из публичных сделок Kalshi за доступный период дозагрузки. ",
+  "Heavy historical days are capped by page budget, so these older rows are not canonical full-day totals.":
+    "Дни с большим числом сделок ограничены лимитом загрузки, поэтому старые значения не являются точными итогами за полный день.",
+  "Kalshi materialized cache mixing recent candlestick rows with older cached history":
+    "Локальное хранилище Kalshi: свежие свечи вместе с ранее сохранённой старой историей",
+  "Recent rows come from public candlesticks; older rows only exist if they were previously materialized into the local cache.":
+    "Свежие дни берутся из публичных свечей; старые дни есть только если раньше были сохранены в локальное хранилище.",
+  "Kalshi public candlestick-derived daily series":
+    "Дневной ряд Kalshi, рассчитанный по публичным свечам",
+  "Recent rows are aggregated from public market candlesticks over the discovered ticker universe.":
+    "Свежие дни собраны из публичных рыночных свечей по найденным обозначениям рынков.",
+  " Coverage is partial because market discovery or candle fetches hit public API limits.":
+    " Покрытие неполное, потому что поиск рынков или загрузка свечей упёрлись в лимиты публичного доступа к данным.",
+  "Computed from the currently displayed platform totals.":
+    "Рассчитано по текущим отображаемым итогам платформ.",
+};
+
+export function translateCoverage(coverage: string | undefined, language: Language): string {
+  const safeCoverage = coverage ?? "unknown";
+  if (language === "en") {
+    return safeCoverage.toUpperCase();
+  }
+  return coverageLabelsRu[safeCoverage] ?? safeCoverage.toUpperCase();
+}
+
+export function translateDataQualityText(message: string | null | undefined, language: Language): string | undefined {
+  if (!message) {
+    return undefined;
+  }
+  if (language === "en") {
+    return message;
+  }
+
+  return Object.entries(dataQualityTextRu).reduce(
+    (translated, [source, replacement]) => translated.replaceAll(source, replacement),
+    message,
+  );
 }

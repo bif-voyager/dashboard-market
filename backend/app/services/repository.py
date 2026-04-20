@@ -321,6 +321,57 @@ class Repository:
 
         return len(aggregated)
 
+    def upsert_daily_volumes(
+        self,
+        *,
+        platform: str,
+        records: Iterable[DailyVolumeRecord],
+    ) -> int:
+        prepared = [record for record in records if record.platform == platform]
+        if not prepared:
+            return 0
+
+        aggregated: dict[tuple[str, str, str], dict[str, float | int]] = defaultdict(
+            lambda: {"turnover_usd": 0.0, "trades_count": 0}
+        )
+        for record in prepared:
+            bucket = (record.day_utc, record.platform, record.normalized_category)
+            aggregated[bucket]["turnover_usd"] += record.turnover_usd
+            aggregated[bucket]["trades_count"] += record.trades_count
+
+        now = datetime.now(UTC).isoformat()
+        with self.database.write_lock, self.database.session() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.executemany(
+                """
+                INSERT INTO daily_volume (
+                    day_utc,
+                    platform,
+                    normalized_category,
+                    turnover_usd,
+                    trades_count,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(day_utc, platform, normalized_category) DO UPDATE SET
+                    turnover_usd = excluded.turnover_usd,
+                    trades_count = excluded.trades_count,
+                    updated_at = excluded.updated_at
+                """,
+                [
+                    (
+                        day_utc,
+                        bucket_platform,
+                        category,
+                        values["turnover_usd"],
+                        values["trades_count"],
+                        now,
+                    )
+                    for (day_utc, bucket_platform, category), values in aggregated.items()
+                ],
+            )
+
+        return len(aggregated)
+
     def replace_platform_daily_volumes(
         self,
         *,

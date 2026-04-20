@@ -162,6 +162,10 @@ class SyncService:
                 scope,
                 series_categories,
             )
+            live_market_records, live_stats = await self.kalshi.sync_live_market_registry(
+                scope,
+                series_categories,
+            )
             historical_market_records, historical_stats = await self.kalshi.sync_historical_market_registry(
                 scope,
                 series_categories,
@@ -175,7 +179,7 @@ class SyncService:
                 series_categories=series_categories,
             )
 
-            market_records = direct_market_records + historical_market_records
+            market_records = direct_market_records + historical_market_records + live_market_records
             markets_upserted = self.repository.upsert_markets(market_records)
             ticker_categories: dict[str, str] = {}
             for record in market_records:
@@ -186,6 +190,10 @@ class SyncService:
                 record.market_key
                 for record in historical_market_records
                 if record.market_key
+            } - {
+                record.market_key
+                for record in direct_market_records + live_market_records
+                if record.market_key
             }
             daily_records, candle_stats = await self.kalshi.sync_recent_candles(
                 ticker_categories,
@@ -193,12 +201,29 @@ class SyncService:
             )
             start_day = (utc_now().date() - timedelta(days=89)).isoformat()
             end_day = utc_now().date().isoformat()
-            daily_rows_replaced = self.repository.replace_daily_volumes(
-                platform="kalshi",
-                start_day=start_day,
-                end_day=end_day,
-                records=daily_records,
+            discovery_partial = (
+                bool(event_stats.get("partial"))
+                or bool(live_stats.get("partial"))
+                or bool(historical_stats.get("partial"))
+                or bool(direct_stats.get("partial"))
+                or bool(candle_stats.get("partial"))
             )
+            if discovery_partial:
+                daily_write_mode = "merge-partial"
+                daily_rows_replaced = 0
+                daily_rows_written = self.repository.upsert_daily_volumes(
+                    platform="kalshi",
+                    records=daily_records,
+                )
+            else:
+                daily_write_mode = "replace-complete"
+                daily_rows_replaced = self.repository.replace_daily_volumes(
+                    platform="kalshi",
+                    start_day=start_day,
+                    end_day=end_day,
+                    records=daily_records,
+                )
+                daily_rows_written = daily_rows_replaced
             finished_at = datetime.now(UTC).isoformat()
 
             return {
@@ -208,12 +233,12 @@ class SyncService:
                 "finishedAt": finished_at,
                 "marketsUpserted": markets_upserted,
                 "dailyRowsReplaced": daily_rows_replaced,
-                "partial": bool(event_stats.get("partial"))
-                or bool(historical_stats.get("partial"))
-                or bool(direct_stats.get("partial"))
-                or bool(candle_stats.get("partial")),
+                "dailyRowsWritten": daily_rows_written,
+                "dailyWriteMode": daily_write_mode,
+                "partial": discovery_partial,
                 "seriesCount": len(series_categories),
                 "eventMapStats": event_stats,
+                "liveMarketStats": live_stats,
                 "historicalMarketStats": historical_stats,
                 "directMarketStats": direct_stats,
                 "candleStats": candle_stats,

@@ -18,7 +18,8 @@ import {
   localeByLanguage,
   translations,
   translateCategory,
-  translateWarning,
+  translateCoverage,
+  translateDataQualityText,
   type Language,
 } from "./lib/i18n";
 
@@ -29,11 +30,27 @@ const rangeOptions: { value: RangeValue; labelKey?: "allTime"; fallback: string 
   { value: "all", labelKey: "allTime", fallback: "All time" },
 ];
 
+type Theme = "light" | "dark";
+
+function getInitialTheme(): Theme {
+  try {
+    const savedTheme = window.localStorage.getItem("market-dashboard-theme");
+    if (savedTheme === "light" || savedTheme === "dark") {
+      return savedTheme;
+    }
+  } catch {
+    return "light";
+  }
+  return "light";
+}
+
 function App() {
   const queryClient = useQueryClient();
   const [range, setRange] = useState<RangeValue>("30d");
   const [selectedCategories, setSelectedCategories] = useState<string[] | null>(null);
   const [language, setLanguage] = useState<Language>("en");
+  const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [mobileControlsHidden, setMobileControlsHidden] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [visiblePlatforms, setVisiblePlatforms] = useState({
     polymarket: true,
@@ -53,6 +70,55 @@ function App() {
     }
     setSelectedCategories(categoriesQuery.data.map((item) => item.slug));
   }, [categoriesQuery.data, selectedCategories]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem("market-dashboard-theme", theme);
+    } catch {
+      // Theme persistence is optional; the toggle should still work without storage access.
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    const mobileQuery = window.matchMedia("(max-width: 720px)");
+    let lastScrollY = window.scrollY;
+    let ticking = false;
+
+    function updateControlsVisibility() {
+      ticking = false;
+      if (!mobileQuery.matches) {
+        setMobileControlsHidden(false);
+        lastScrollY = window.scrollY;
+        return;
+      }
+
+      const currentScrollY = window.scrollY;
+      const delta = currentScrollY - lastScrollY;
+      if (currentScrollY < 48 || delta < -10) {
+        setMobileControlsHidden(false);
+      } else if (currentScrollY > 120 && delta > 10) {
+        setMobileControlsHidden(true);
+      }
+      lastScrollY = currentScrollY;
+    }
+
+    function requestVisibilityUpdate() {
+      if (ticking) {
+        return;
+      }
+      ticking = true;
+      window.requestAnimationFrame(updateControlsVisibility);
+    }
+
+    window.addEventListener("scroll", requestVisibilityUpdate, { passive: true });
+    mobileQuery.addEventListener("change", updateControlsVisibility);
+    updateControlsVisibility();
+    return () => {
+      window.removeEventListener("scroll", requestVisibilityUpdate);
+      mobileQuery.removeEventListener("change", updateControlsVisibility);
+    };
+  }, []);
 
   const volumeQuery = useQuery({
     queryKey: ["volume", range, selectedCategories],
@@ -75,10 +141,6 @@ function App() {
   const hasSelection = selectedCategories !== null && selected.length > 0;
   const volume = volumeQuery.data;
   const quality = volume?.dataQuality;
-  const qualityItems = [
-    quality?.polymarket ? { platform: "Polymarket", quality: quality.polymarket, tone: "sea" as const } : null,
-    quality?.kalshi ? { platform: "Kalshi", quality: quality.kalshi, tone: "ember" as const } : null,
-  ].filter((item): item is { platform: string; quality: PlatformDataQuality; tone: "sea" | "ember" } => item !== null);
   const hasNonZeroPoints = Boolean(
     volume?.points.some((point) => {
       const polymarketValue = visiblePlatforms.polymarket ? (point.polymarket ?? 0) : 0;
@@ -88,33 +150,30 @@ function App() {
   );
   const initialLoading = categoriesQuery.isLoading || selectedCategories === null;
   const hardError = categoriesQuery.error ?? (!volume && volumeQuery.error ? volumeQuery.error : null);
+  const dataQualityNotification =
+    volume?.partial || (volume?.warnings ?? []).length > 0
+      ? { id: "data-quality", kind: "info" as const, message: t.dataQualityNotice }
+      : null;
+  const statusNotification = hardError
+    ? {
+        id: "hard-error",
+        kind: "error" as const,
+        message: hardError instanceof Error ? hardError.message : t.failedToLoad,
+      }
+    : volume?.stale
+      ? { id: "stale", kind: "warning" as const, message: t.showingCachedData }
+      : syncMutation.data?.status === "busy"
+        ? { id: "sync-busy", kind: "info" as const, message: t.syncAlreadyRunning }
+        : syncMutation.data?.status === "completed"
+          ? { id: "sync-completed", kind: "info" as const, message: t.latestSyncFinished }
+          : null;
   const notifications: NotificationItem[] = [
-    ...(syncMutation.data?.status === "completed"
-      ? [{ id: "sync-completed", kind: "info" as const, message: t.latestSyncFinished }]
-      : []),
-    ...(syncMutation.data?.status === "busy"
-      ? [{ id: "sync-busy", kind: "info" as const, message: t.syncAlreadyRunning }]
-      : []),
-    ...(volume?.stale ? [{ id: "stale", kind: "warning" as const, message: t.showingCachedData }] : []),
-    ...(volume?.partial ? [{ id: "partial", kind: "info" as const, message: t.partialHistory }] : []),
-    ...((volume?.warnings ?? []).map((warning, index) => ({
-      id: `provider-warning-${index}-${warning}`,
-      kind: "warning" as const,
-      message: translateWarning(warning, language),
-    }))),
-    ...(hardError
-      ? [
-          {
-            id: "hard-error",
-            kind: "error" as const,
-            message: hardError instanceof Error ? hardError.message : t.failedToLoad,
-          },
-        ]
-      : []),
-  ];
+    dataQualityNotification,
+    statusNotification,
+  ].filter((item): item is NotificationItem => item !== null);
 
   function formatCoverage(qualityItem: PlatformDataQuality | undefined): string {
-    return (qualityItem?.coverage ?? "unknown").toUpperCase();
+    return translateCoverage(qualityItem?.coverage, language);
   }
 
   function toggleCategory(slug: string) {
@@ -135,6 +194,10 @@ function App() {
     setSelectedCategories(categories.map((item) => item.slug));
   }
 
+  function toggleTheme() {
+    setTheme((current) => (current === "dark" ? "light" : "dark"));
+  }
+
   function togglePlatform(platform: "polymarket" | "kalshi") {
     const otherPlatform = platform === "polymarket" ? "kalshi" : "polymarket";
     if (visiblePlatforms[platform] && !visiblePlatforms[otherPlatform]) {
@@ -150,7 +213,7 @@ function App() {
     <main className="page-shell">
       <div className="page-shell__glow page-shell__glow--left" />
       <div className="page-shell__glow page-shell__glow--right" />
-      <div className="floating-controls">
+      <div className={mobileControlsHidden ? "floating-controls floating-controls--mobile-hidden" : "floating-controls"}>
         <div className="language-toggle" aria-label="Language switcher">
           <button
             className={language === "en" ? "language-option language-option--active" : "language-option"}
@@ -167,6 +230,17 @@ function App() {
             RUS
           </button>
         </div>
+        <button
+          className={theme === "dark" ? "theme-toggle theme-toggle--active" : "theme-toggle"}
+          type="button"
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? t.lightTheme : t.darkTheme}
+          title={theme === "dark" ? t.lightTheme : t.darkTheme}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" className="theme-toggle__icon">
+            <path d="M20.2 15.3A8.4 8.4 0 0 1 8.7 3.8a8.7 8.7 0 1 0 11.5 11.5Z" />
+          </svg>
+        </button>
         <NotificationCenter
           notifications={notifications}
           title={t.notifications}
@@ -276,9 +350,6 @@ function App() {
 
       {!initialLoading && hasSelection && volume ? (
         <>
-          {volume.partial ? (
-            <StatusBanner kind="info">{t.partialHistory}</StatusBanner>
-          ) : null}
           {volume.stale ? (
             <StatusBanner kind="warning">{t.showingCachedData}</StatusBanner>
           ) : null}
@@ -289,20 +360,20 @@ function App() {
               value={formatCurrency(volume.totals.polymarket, locale)}
               tone="sea"
               badge={formatCoverage(quality?.polymarket)}
-              detail={quality?.polymarket?.sourceLabel}
+              detail={translateDataQualityText(quality?.polymarket?.sourceLabel, language)}
             />
             <MetricCard
               title={t.kalshiVolume}
               value={formatCurrency(volume.totals.kalshi, locale)}
               tone="ember"
               badge={formatCoverage(quality?.kalshi)}
-              detail={quality?.kalshi?.sourceLabel}
+              detail={translateDataQualityText(quality?.kalshi?.sourceLabel, language)}
             />
             <MetricCard
               title={t.difference}
               value={formatCurrency(volume.totals.difference, locale)}
               tone="ink"
-              detail="Computed from the currently displayed platform totals."
+              detail={translateDataQualityText("Computed from the currently displayed platform totals.", language)}
             />
           </section>
 
@@ -336,27 +407,8 @@ function App() {
               <div className="chart-subtle-note">{t.refreshingChart}</div>
             ) : null}
 
-            {qualityItems.length ? (
-              <div className="source-grid" aria-label="Data source notes">
-                {qualityItems.map((item) => (
-                  <article
-                    key={item.platform}
-                    className={item.tone === "sea" ? "source-card source-card--sea" : "source-card source-card--ember"}
-                  >
-                    <div className="source-card__header">
-                      <strong>{item.platform}</strong>
-                      <div className="source-badges">
-                        <span className="source-badge">{item.quality.sourceType}</span>
-                        <span className="source-badge source-badge--muted">{formatCoverage(item.quality)}</span>
-                      </div>
-                    </div>
-                    <p className="source-card__body">{item.quality.sourceLabel}</p>
-                    {item.quality.coverageReason ? (
-                      <p className="source-card__meta">{item.quality.coverageReason}</p>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
+            {volume.partial ? (
+              <div className="chart-data-note">{t.chartDataNote}</div>
             ) : null}
 
             {hasNonZeroPoints ? (

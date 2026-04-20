@@ -39,6 +39,72 @@ class KalshiAdapter:
             if item.get("ticker")
         }
 
+    async def sync_live_market_registry(
+        self,
+        scope: str,
+        series_categories: dict[str, str],
+    ) -> tuple[list[MarketRecord], dict]:
+        cursor: str | None = None
+        page_count = 0
+        max_pages = (
+            self.settings.kalshi_event_bootstrap_max_pages
+            if scope == "all"
+            else self.settings.kalshi_event_recent_max_pages
+        )
+        records: list[MarketRecord] = []
+        stats = {
+            "pages": 0,
+            "eventsScanned": 0,
+            "records": 0,
+            "partial": False,
+            "minDay": None,
+            "maxDay": None,
+        }
+
+        for _ in range(max_pages):
+            params: dict[str, str | int | bool] = {
+                "limit": 200,
+                "with_nested_markets": "true",
+            }
+            if cursor:
+                params["cursor"] = cursor
+            payload = await self.client.get_json("/events", params=params)
+            events = payload.get("events", [])
+            if not events:
+                break
+            page_count += 1
+            stats["eventsScanned"] += len(events)
+            for event in events:
+                series_key = str(event.get("series_ticker")) if event.get("series_ticker") else None
+                raw_category = event.get("category")
+                category = series_categories.get(series_key or "", normalize_category(raw_category))
+                for market in event.get("markets", []) or []:
+                    ticker = market.get("ticker")
+                    if not ticker:
+                        continue
+                    min_day, max_day = self._extract_market_date_bounds(market, event)
+                    self._merge_date_bounds(stats, min_day, max_day)
+                    records.append(
+                        MarketRecord(
+                            platform="kalshi",
+                            market_key=str(ticker),
+                            event_key=str(event.get("event_ticker")) if event.get("event_ticker") else None,
+                            series_key=series_key,
+                            title=market.get("title") or event.get("title"),
+                            raw_category=raw_category,
+                            normalized_category=category,
+                            source="events-live",
+                        )
+                    )
+            cursor = payload.get("cursor")
+            if not cursor:
+                break
+
+        stats["pages"] = page_count
+        stats["records"] = len(records)
+        stats["partial"] = bool(cursor) and page_count >= max_pages
+        return records, stats
+
     async def sync_historical_market_registry(
         self,
         scope: str,
