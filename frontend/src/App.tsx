@@ -1,27 +1,38 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MetricCard } from "./components/MetricCard";
+import { NotificationCenter, type NotificationItem } from "./components/NotificationCenter";
 import { StatePanel } from "./components/StatePanel";
-import { StatusBanner } from "./components/StatusBanner";
 import { VolumeChart } from "./components/VolumeChart";
 import { buildCsvUrl, fetchCategories, fetchVolume, syncData, type RangeValue } from "./lib/api";
-import { formatAsOf, formatCurrency } from "./lib/format";
+import { formatCurrency } from "./lib/format";
+import {
+  localeByLanguage,
+  translations,
+  translateCategory,
+  translateWarning,
+  type Language,
+} from "./lib/i18n";
 
-const rangeOptions: { value: RangeValue; label: string }[] = [
-  { value: "7d", label: "7D" },
-  { value: "30d", label: "30D" },
-  { value: "90d", label: "90D" },
-  { value: "all", label: "All time" },
+const rangeOptions: { value: RangeValue; labelKey?: "allTime"; fallback: string }[] = [
+  { value: "7d", fallback: "7D" },
+  { value: "30d", fallback: "30D" },
+  { value: "90d", fallback: "90D" },
+  { value: "all", labelKey: "allTime", fallback: "All time" },
 ];
 
 function App() {
   const queryClient = useQueryClient();
   const [range, setRange] = useState<RangeValue>("30d");
   const [selectedCategories, setSelectedCategories] = useState<string[] | null>(null);
+  const [language, setLanguage] = useState<Language>("en");
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [visiblePlatforms, setVisiblePlatforms] = useState({
     polymarket: true,
     kalshi: true,
   });
+  const t = translations[language];
+  const locale = localeByLanguage[language];
 
   const categoriesQuery = useQuery({
     queryKey: ["categories"],
@@ -63,6 +74,30 @@ function App() {
   );
   const initialLoading = categoriesQuery.isLoading || selectedCategories === null;
   const hardError = categoriesQuery.error ?? (!volume && volumeQuery.error ? volumeQuery.error : null);
+  const notifications: NotificationItem[] = [
+    ...(syncMutation.data?.status === "completed"
+      ? [{ id: "sync-completed", kind: "info" as const, message: t.latestSyncFinished }]
+      : []),
+    ...(syncMutation.data?.status === "busy"
+      ? [{ id: "sync-busy", kind: "info" as const, message: t.syncAlreadyRunning }]
+      : []),
+    ...(volume?.stale ? [{ id: "stale", kind: "warning" as const, message: t.showingCachedData }] : []),
+    ...(volume?.partial ? [{ id: "partial", kind: "info" as const, message: t.partialHistory }] : []),
+    ...((volume?.warnings ?? []).map((warning, index) => ({
+      id: `provider-warning-${index}-${warning}`,
+      kind: "warning" as const,
+      message: translateWarning(warning, language),
+    }))),
+    ...(hardError
+      ? [
+          {
+            id: "hard-error",
+            kind: "error" as const,
+            message: hardError instanceof Error ? hardError.message : t.failedToLoad,
+          },
+        ]
+      : []),
+  ];
 
   function toggleCategory(slug: string) {
     if (selectedCategories === null) {
@@ -97,13 +132,38 @@ function App() {
     <main className="page-shell">
       <div className="page-shell__glow page-shell__glow--left" />
       <div className="page-shell__glow page-shell__glow--right" />
+      <div className="floating-controls">
+        <div className="language-toggle" aria-label="Language switcher">
+          <button
+            className={language === "en" ? "language-option language-option--active" : "language-option"}
+            onClick={() => setLanguage("en")}
+            type="button"
+          >
+            EN
+          </button>
+          <button
+            className={language === "ru" ? "language-option language-option--active" : "language-option"}
+            onClick={() => setLanguage("ru")}
+            type="button"
+          >
+            RUS
+          </button>
+        </div>
+        <NotificationCenter
+          notifications={notifications}
+          title={t.notifications}
+          emptyLabel={t.noNotifications}
+          ariaLabel={t.notificationBell}
+          floating
+        />
+      </div>
 
       <section className="hero-card">
         <div>
-          <span className="eyebrow">Hiring-test ready dashboard</span>
-          <h1>Historical market volume across Polymarket and Kalshi</h1>
+          <span className="eyebrow">{t.eyebrow}</span>
+          <h1>{t.title}</h1>
           <p className="hero-copy">
-            Read-only analytics on top of public market-data APIs, normalized into one UTC daily market-volume view.
+            {t.heroCopy}
           </p>
         </div>
 
@@ -113,7 +173,7 @@ function App() {
             onClick={() => syncMutation.mutate("recent")}
             disabled={syncMutation.isPending}
           >
-            {syncMutation.isPending ? "Syncing..." : "Refresh data"}
+            {syncMutation.isPending ? t.syncing : t.refreshData}
           </button>
           <a
             className="action-button action-button--ghost"
@@ -121,44 +181,15 @@ function App() {
             target="_blank"
             rel="noreferrer"
           >
-            Export CSV
+            {t.exportCsv}
           </a>
         </div>
       </section>
 
-      {syncMutation.data?.status === "completed" ? (
-        <StatusBanner kind="info">Latest sync finished. Queries were refreshed against the local cache.</StatusBanner>
-      ) : null}
-      {syncMutation.data?.status === "busy" ? (
-        <StatusBanner kind="info">
-          A sync is already running in the backend. The dashboard will refresh once that in-flight job updates the cache.
-        </StatusBanner>
-      ) : null}
-      {volume?.stale ? (
-        <StatusBanner kind="warning">
-          Showing cached data. One of the upstream syncs last failed, so the chart may be partially stale.
-        </StatusBanner>
-      ) : null}
-      {volume?.partial ? (
-        <StatusBanner kind="info">
-          Some source history is partial. The chart uses the local cache plus any provider metadata that is safe to apply.
-        </StatusBanner>
-      ) : null}
-      {volume?.warnings.map((warning) => (
-        <StatusBanner key={warning} kind="warning">
-          {warning}
-        </StatusBanner>
-      ))}
-      {hardError ? (
-        <StatusBanner kind="error">
-          {hardError instanceof Error ? hardError.message : "Failed to load dashboard data."}
-        </StatusBanner>
-      ) : null}
-
       <section className="toolbar-card">
         <div className="toolbar-row">
           <div>
-            <span className="toolbar-label">Range</span>
+            <span className="toolbar-label">{t.range}</span>
             <div className="pill-row">
               {rangeOptions.map((item) => (
                 <button
@@ -166,40 +197,47 @@ function App() {
                   className={item.value === range ? "pill pill--active" : "pill"}
                   onClick={() => setRange(item.value)}
                 >
-                  {item.label}
+                  {item.labelKey ? t[item.labelKey] : item.fallback}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="toolbar-meta">
-            <span className="toolbar-label">As of</span>
-            <strong>{formatAsOf(volume?.asOf ?? null)}</strong>
-          </div>
+          <span className="toolbar-date-spacer" aria-hidden="true" />
         </div>
 
-        <div>
+        <div className="category-section">
           <div className="toolbar-chip-header">
-            <span className="toolbar-label">Categories</span>
+            <button
+              className={categoriesOpen ? "category-toggle category-toggle--active" : "category-toggle"}
+              type="button"
+              onClick={() => setCategoriesOpen((current) => !current)}
+              aria-expanded={categoriesOpen}
+            >
+              <span>{t.categories}</span>
+              <strong>{selected.length}</strong>
+            </button>
             <button className="mini-button" onClick={selectAllCategories} disabled={!categories.length}>
-              Select all
+              {t.selectAll}
             </button>
           </div>
-          <div className="chip-grid">
-            {categories.map((item) => {
-              const active = selected.includes(item.slug);
-              return (
-                <button
-                  key={item.slug}
-                  className={active ? "chip chip--active" : "chip"}
-                  onClick={() => toggleCategory(item.slug)}
-                >
-                  <span>{item.label}</span>
-                  <small>{item.platforms.join(" + ")}</small>
-                </button>
-              );
-            })}
-          </div>
+          {categoriesOpen ? (
+            <div className="chip-grid">
+              {categories.map((item) => {
+                const active = selected.includes(item.slug);
+                return (
+                  <button
+                    key={item.slug}
+                    className={active ? "chip chip--active" : "chip"}
+                    onClick={() => toggleCategory(item.slug)}
+                  >
+                    <span>{translateCategory(item.slug, item.label, language)}</span>
+                    <small>{item.platforms.join(" + ")}</small>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -215,16 +253,16 @@ function App() {
       {!initialLoading && hasSelection && volume ? (
         <>
           <section className="metrics-grid">
-            <MetricCard title="Polymarket volume" value={formatCurrency(volume.totals.polymarket)} tone="sea" />
-            <MetricCard title="Kalshi volume" value={formatCurrency(volume.totals.kalshi)} tone="ember" />
-            <MetricCard title="Difference" value={formatCurrency(volume.totals.difference)} tone="ink" />
+            <MetricCard title={t.polymarketVolume} value={formatCurrency(volume.totals.polymarket, locale)} tone="sea" />
+            <MetricCard title={t.kalshiVolume} value={formatCurrency(volume.totals.kalshi, locale)} tone="ember" />
+            <MetricCard title={t.difference} value={formatCurrency(volume.totals.difference, locale)} tone="ink" />
           </section>
 
           <section className="chart-card">
             <div className="chart-card__header">
               <div>
-                <span className="eyebrow">Combined view</span>
-                <h2>Daily market volume in USD notional</h2>
+                <span className="eyebrow">{t.combinedView}</span>
+                <h2>{t.chartTitle}</h2>
               </div>
               <div className="legend-row">
                 <button
@@ -247,15 +285,15 @@ function App() {
             </div>
 
             {volumeQuery.isFetching && !volumeQuery.isLoading ? (
-              <div className="chart-subtle-note">Refreshing chart with cached data kept in place.</div>
+              <div className="chart-subtle-note">{t.refreshingChart}</div>
             ) : null}
 
             {hasNonZeroPoints ? (
-              <VolumeChart data={volume.points} visiblePlatforms={visiblePlatforms} />
+              <VolumeChart data={volume.points} visiblePlatforms={visiblePlatforms} language={language} />
             ) : (
               <StatePanel
-                title="No volume found"
-                body="There is no materialized market volume for the chosen categories and visible platforms in this range yet."
+                title={t.noVolumeTitle}
+                body={t.noVolumeBody}
               />
             )}
           </section>
@@ -264,11 +302,11 @@ function App() {
 
       {!initialLoading && selectedCategories !== null && selectedCategories.length === 0 ? (
         <StatePanel
-          title="Choose at least one category"
-          body="The chart is intentionally empty until you select one or more categories."
+          title={t.chooseCategoryTitle}
+          body={t.chooseCategoryBody}
           action={
             <button className="action-button" onClick={selectAllCategories}>
-              Restore filters
+              {t.restoreFilters}
             </button>
           }
         />

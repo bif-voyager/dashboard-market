@@ -25,7 +25,7 @@ Current source paths:
   - Daily chart series comes from public `GET /v1/builders/volume?timePeriod=DAY`, aggregated by UTC day across returned builders.
   - This is a public builder-attributed volume proxy, not a guaranteed full exchange-wide warehouse.
   - Category-filtered Polymarket chart series is estimated by scaling that public daily series by the selected categories' metadata share for the chosen range.
-  - Category-filtered Polymarket daily history remains limited to materialized public trades because the public trade endpoint does not expose a clean full historical category backfill.
+  - Public trades are synced separately as a bounded diagnostic sample from discovered high-volume events/markets. They are not mixed into the main Polymarket chart metric.
 - `Kalshi`:
   - Recent daily series comes from public candlestick `volume_fp`, aggregated by UTC day across the materialized market registry.
   - This is the most stable public-data path for the demo build.
@@ -35,11 +35,13 @@ Current source paths:
 This submission is designed to be **finished and explainable**, not to be a perfect historical ingestion system.
 
 - `Polymarket` public trade history is partial. The public `/trades` endpoint does not expose a clean full exchange-wide category backfill.
+- `Polymarket` trade sync uses market/event-scoped samples discovered from Gamma metadata, with hard page caps. It improves explainability and diagnostics, but it is intentionally not treated as a complete history.
 - `Polymarket` chart history uses public builder-volume data. It is real data from a public Polymarket endpoint, but it should be read as builder-attributed volume, not a guaranteed canonical exchange-wide warehouse.
 - `Polymarket` category filters are proportional estimates over the platform-wide builder-volume series, using category shares from public market metadata. They are consistent on the chart and cards, but they are not exact raw category trade history.
 - `Kalshi` recent data is materialized from public market registry + candlestick volume. It is stable for the demo, but it is still limited by public API pagination and the local cache.
 - `All time` means **whatever history is currently materialized in local SQLite**, not guaranteed full platform history.
 - When coverage is incomplete, the backend returns `partial=true` and warnings, and the UI shows those warnings.
+- `GET /api/volume` also includes a `dataQuality` object describing whether each platform series is exact, estimated, or partial.
 
 ## Architecture
 
@@ -73,7 +75,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 3. Start the frontend in a second terminal:
 
 ```bash
-cd frontend
+cd E:\market-dashboard\frontend
 npm install
 npm run dev -- --host 0.0.0.0 --port 3000
 ```
@@ -96,6 +98,15 @@ If Docker Desktop is not running, the compose path will fail and you should use 
 - `GET /api/volume?range=30d&categories=politics,sports`
 - `POST /api/admin/sync?scope=recent`
 - `GET /api/export.csv?range=90d&categories=politics`
+
+## Data sync knobs
+
+The defaults are intentionally capped so the demo does not hang on public APIs:
+
+- `POLY_METADATA_RECENT_MAX_PAGES` / `POLY_METADATA_BOOTSTRAP_MAX_PAGES` control Gamma market discovery.
+- `POLY_TRADE_CANDIDATE_EVENTS` and `POLY_TRADE_CANDIDATE_MARKETS` cap the raw Polymarket diagnostic sample.
+- `POLY_TRADE_PAGES_PER_CANDIDATE` caps pages per discovered event/market.
+- `KALSHI_DIRECT_MARKET_RECENT_MAX_PAGES` and `KALSHI_CANDLESTICK_CHUNK_SIZE` control Kalshi registry/candlestick materialization.
 
 ## Tests
 

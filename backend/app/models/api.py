@@ -55,6 +55,7 @@ class VolumeResponse(BaseModel):
     partial: bool = False
     stale: bool = False
     warnings: list[str] = Field(default_factory=list)
+    dataQuality: dict = Field(default_factory=dict)
     totals: VolumeTotals
     points: list[VolumePoint]
 

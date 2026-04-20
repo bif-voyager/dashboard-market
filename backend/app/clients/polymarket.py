@@ -10,7 +10,6 @@ from app.utils import (
     coerce_timestamp,
     day_from_timestamp,
     infer_polymarket_category,
-    normalize_category,
     polymarket_turnover_usd,
     stable_trade_key,
     utc_now,
@@ -87,6 +86,8 @@ class PolymarketAdapter:
         limit: int,
     ) -> tuple[list[MarketRecord], list[CategorySnapshotRecord], dict]:
         records: list[MarketRecord] = []
+        trade_event_candidates: list[tuple[float, str]] = []
+        trade_market_candidates: list[tuple[float, str]] = []
         category_snapshot = defaultdict(
             lambda: {"volume_24h": 0.0, "volume_1wk": 0.0, "volume_1mo": 0.0, "volume_total": 0.0}
         )
@@ -113,6 +114,11 @@ class PolymarketAdapter:
             for market in markets:
                 events = market.get("events") or []
                 primary_event = events[0] if events else {}
+                score = self._market_volume_score(market)
+                if market.get("conditionId"):
+                    trade_market_candidates.append((score, str(market.get("conditionId"))))
+                if primary_event.get("id"):
+                    trade_event_candidates.append((score, str(primary_event.get("id"))))
                 category = infer_polymarket_category(
                     raw_category=market.get("category"),
                     title=market.get("question"),
@@ -153,7 +159,19 @@ class PolymarketAdapter:
                 )
                 for category, values in category_snapshot.items()
             ],
-            {"mode": "keyset", "pages": page_count, "stalled": stalled},
+            {
+                "mode": "keyset",
+                "pages": page_count,
+                "stalled": stalled,
+                "tradeCandidateEventIds": self._rank_candidates(
+                    trade_event_candidates,
+                    self.settings.poly_trade_candidate_events,
+                ),
+                "tradeCandidateMarketKeys": self._rank_candidates(
+                    trade_market_candidates,
+                    self.settings.poly_trade_candidate_markets,
+                ),
+            },
         )
 
     async def _fetch_markets_offset(
@@ -163,6 +181,8 @@ class PolymarketAdapter:
         limit: int,
     ) -> tuple[list[MarketRecord], list[CategorySnapshotRecord], dict]:
         records: list[MarketRecord] = []
+        trade_event_candidates: list[tuple[float, str]] = []
+        trade_market_candidates: list[tuple[float, str]] = []
         category_snapshot = defaultdict(
             lambda: {"volume_24h": 0.0, "volume_1wk": 0.0, "volume_1mo": 0.0, "volume_total": 0.0}
         )
@@ -176,6 +196,11 @@ class PolymarketAdapter:
             for market in payload:
                 events = market.get("events") or []
                 primary_event = events[0] if events else {}
+                score = self._market_volume_score(market)
+                if market.get("conditionId"):
+                    trade_market_candidates.append((score, str(market.get("conditionId"))))
+                if primary_event.get("id"):
+                    trade_event_candidates.append((score, str(primary_event.get("id"))))
                 category = infer_polymarket_category(
                     raw_category=market.get("category"),
                     title=market.get("question"),
@@ -213,10 +238,123 @@ class PolymarketAdapter:
                 )
                 for category, values in category_snapshot.items()
             ],
-            {"mode": "offset", "pages": max_pages},
+            {
+                "mode": "offset",
+                "pages": max_pages,
+                "tradeCandidateEventIds": self._rank_candidates(
+                    trade_event_candidates,
+                    self.settings.poly_trade_candidate_events,
+                ),
+                "tradeCandidateMarketKeys": self._rank_candidates(
+                    trade_market_candidates,
+                    self.settings.poly_trade_candidate_markets,
+                ),
+            },
         )
 
-    async def sync_trades(self, scope: str, category_lookup: callable) -> tuple[list[TradeRecord], dict]:
+    def _market_volume_score(self, market: dict) -> float:
+        for key in ("volume1mo", "volume1wk", "volume24hr", "volume"):
+            try:
+                score = float(market.get(key) or 0)
+            except (TypeError, ValueError):
+                score = 0.0
+            if score > 0:
+                return score
+        return 0.0
+
+    def _rank_candidates(self, candidates: list[tuple[float, str]], limit: int) -> list[str]:
+        ranked: list[str] = []
+        seen: set[str] = set()
+        for _, key in sorted(candidates, key=lambda item: item[0], reverse=True):
+            if key in seen:
+                continue
+            seen.add(key)
+            ranked.append(key)
+            if len(ranked) >= limit:
+                break
+        return ranked
+
+    async def sync_trades(
+        self,
+        scope: str,
+        category_lookup: callable,
+        *,
+        event_ids: list[str] | None = None,
+        market_keys: list[str] | None = None,
+    ) -> tuple[list[TradeRecord], dict]:
+        if event_ids:
+            return await self._sync_trades_for_candidates(
+                category_lookup=category_lookup,
+                candidate_kind="event",
+                param_name="eventId",
+                candidates=event_ids[: self.settings.poly_trade_candidate_events],
+            )
+        if market_keys:
+            return await self._sync_trades_for_candidates(
+                category_lookup=category_lookup,
+                candidate_kind="market",
+                param_name="market",
+                candidates=market_keys[: self.settings.poly_trade_candidate_markets],
+            )
+
+        trades, stats = await self._sync_global_trades_sample(scope, category_lookup)
+        stats["mode"] = "global-offset-sample"
+        stats["usedForChart"] = False
+        return trades, stats
+
+    async def _sync_trades_for_candidates(
+        self,
+        *,
+        category_lookup: callable,
+        candidate_kind: str,
+        param_name: str,
+        candidates: list[str],
+    ) -> tuple[list[TradeRecord], dict]:
+        limit = min(self.settings.poly_page_limit, 1000)
+        max_pages_per_candidate = max(1, self.settings.poly_trade_pages_per_candidate)
+        trades: list[TradeRecord] = []
+        seen_trade_keys: set[str] = set()
+        pages_processed = 0
+        candidates_with_trades = 0
+        oldest_seen = None
+
+        for candidate in candidates:
+            candidate_had_trades = False
+            for page in range(max_pages_per_candidate):
+                payload = await self.data_client.get_json(
+                    "/trades",
+                    params={param_name: candidate, "limit": limit, "offset": page * limit},
+                )
+                batch = payload if isinstance(payload, list) else payload.get("value", [])
+                if not batch:
+                    break
+                pages_processed += 1
+                candidate_had_trades = True
+                for trade in batch:
+                    record = self._trade_record_from_payload(trade, category_lookup)
+                    if record.trade_key in seen_trade_keys:
+                        continue
+                    seen_trade_keys.add(record.trade_key)
+                    trades.append(record)
+                    trade_time = coerce_timestamp(trade.get("timestamp"))
+                    oldest_seen = trade_time if oldest_seen is None else min(oldest_seen, trade_time)
+                if len(batch) < limit:
+                    break
+            if candidate_had_trades:
+                candidates_with_trades += 1
+
+        return trades, {
+            "mode": f"{candidate_kind}-scoped-sample",
+            "candidateCount": len(candidates),
+            "candidatesWithTrades": candidates_with_trades,
+            "pages": pages_processed,
+            "oldestTrade": None if oldest_seen is None else oldest_seen.isoformat(),
+            "partial": True,
+            "usedForChart": False,
+            "note": "Raw Polymarket trades are sampled from discovered high-volume candidates; the dashboard chart uses builder-volume instead.",
+        }
+
+    async def _sync_global_trades_sample(self, scope: str, category_lookup: callable) -> tuple[list[TradeRecord], dict]:
         limit = min(self.settings.poly_page_limit, 1000)
         max_pages = self.settings.poly_bootstrap_max_pages if scope == "all" else self.settings.poly_recent_max_pages
         cutoff = utc_now() - timedelta(days=90)
@@ -243,28 +381,7 @@ class PolymarketAdapter:
             for trade in batch:
                 trade_time = coerce_timestamp(trade.get("timestamp"))
                 oldest_seen = trade_time if oldest_seen is None else min(oldest_seen, trade_time)
-                category = category_lookup(str(trade.get("conditionId"))) or "uncategorized"
-                turnover = polymarket_turnover_usd(trade)
-                trades.append(
-                    TradeRecord(
-                        platform="polymarket",
-                        trade_key=stable_trade_key(
-                            trade.get("transactionHash"),
-                            trade.get("conditionId"),
-                            trade.get("timestamp"),
-                            trade.get("side"),
-                            trade.get("size"),
-                            trade.get("price"),
-                            trade.get("asset"),
-                        ),
-                        market_key=str(trade.get("conditionId")),
-                        trade_ts=trade_time.isoformat(),
-                        day_utc=day_from_timestamp(trade.get("timestamp")),
-                        normalized_category=category,
-                        turnover_usd=float(turnover),
-                        source="data-trades",
-                    )
-                )
+                trades.append(self._trade_record_from_payload(trade, category_lookup))
             if scope != "all" and oldest_seen is not None and oldest_seen <= cutoff:
                 break
             if len(batch) < limit:
@@ -278,3 +395,27 @@ class PolymarketAdapter:
             "partial": (scope == "all" and (pages_processed >= max_pages or offset_ceiling_hit))
             or (scope != "all" and not covered_recent_window),
         }
+
+    def _trade_record_from_payload(self, trade: dict, category_lookup: callable) -> TradeRecord:
+        market_key = str(trade.get("conditionId") or "")
+        trade_time = coerce_timestamp(trade.get("timestamp"))
+        category = category_lookup(market_key) or "uncategorized"
+        turnover = polymarket_turnover_usd(trade)
+        return TradeRecord(
+            platform="polymarket",
+            trade_key=stable_trade_key(
+                trade.get("transactionHash"),
+                trade.get("conditionId"),
+                trade.get("timestamp"),
+                trade.get("side"),
+                trade.get("size"),
+                trade.get("price"),
+                trade.get("asset"),
+            ),
+            market_key=market_key,
+            trade_ts=trade_time.isoformat(),
+            day_utc=day_from_timestamp(trade.get("timestamp")),
+            normalized_category=category,
+            turnover_usd=float(turnover),
+            source="data-trades-sample",
+        )

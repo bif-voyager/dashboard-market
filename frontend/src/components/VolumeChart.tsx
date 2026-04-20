@@ -9,6 +9,8 @@ import {
 } from "recharts";
 import type { VolumePoint } from "../lib/api";
 import { formatCompactCurrency, formatCurrency, formatDateLabel } from "../lib/format";
+import type { Language } from "../lib/i18n";
+import { localeByLanguage, translations } from "../lib/i18n";
 
 interface VolumeChartProps {
   data: VolumePoint[];
@@ -16,9 +18,13 @@ interface VolumeChartProps {
     polymarket: boolean;
     kalshi: boolean;
   };
+  language: Language;
 }
 
-export function VolumeChart({ data, visiblePlatforms }: VolumeChartProps) {
+export function VolumeChart({ data, visiblePlatforms, language }: VolumeChartProps) {
+  const locale = localeByLanguage[language];
+  const t = translations[language];
+
   return (
     <div className="chart-shell">
       <ResponsiveContainer width="100%" height={380}>
@@ -26,14 +32,14 @@ export function VolumeChart({ data, visiblePlatforms }: VolumeChartProps) {
           <CartesianGrid strokeDasharray="3 6" stroke="rgba(32, 42, 53, 0.15)" vertical={false} />
           <XAxis
             dataKey="date"
-            tickFormatter={formatDateLabel}
+            tickFormatter={(value: string) => formatDateLabel(value, locale)}
             tick={{ fill: "rgba(32, 42, 53, 0.72)", fontSize: 12 }}
             axisLine={false}
             tickLine={false}
             minTickGap={28}
           />
           <YAxis
-            tickFormatter={formatCompactCurrency}
+            tickFormatter={(value: number) => formatCompactCurrency(value, locale)}
             tick={{ fill: "rgba(32, 42, 53, 0.72)", fontSize: 12 }}
             axisLine={false}
             tickLine={false}
@@ -47,11 +53,11 @@ export function VolumeChart({ data, visiblePlatforms }: VolumeChartProps) {
               background: "rgba(255,255,255,0.95)",
             }}
             formatter={(value: unknown, name: string) => [
-              typeof value === "number" ? formatCurrency(value) : "No data",
+              typeof value === "number" ? formatCurrency(value, locale) : t.noData,
               name === "polymarket" ? "Polymarket" : "Kalshi",
             ]}
             labelFormatter={(label: string) =>
-              new Date(`${label}T00:00:00Z`).toLocaleDateString("en-US", {
+              new Date(`${label}T00:00:00Z`).toLocaleDateString(locale, {
                 weekday: "short",
                 month: "short",
                 day: "numeric",

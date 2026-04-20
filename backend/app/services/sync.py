@@ -120,10 +120,23 @@ class SyncService:
                 records=platform_daily_records,
             )
 
-        def category_lookup(market_key: str) -> str | None:
-            return self.repository.get_market_category("polymarket", market_key)
+        category_by_market = {
+            record.market_key: record.normalized_category
+            for record in market_records
+        }
 
-        trade_records, trade_stats = await self.polymarket.sync_trades(scope, category_lookup)
+        def category_lookup(market_key: str) -> str | None:
+            return category_by_market.get(market_key) or self.repository.get_market_category(
+                "polymarket",
+                market_key,
+            )
+
+        trade_records, trade_stats = await self.polymarket.sync_trades(
+            scope,
+            category_lookup,
+            event_ids=market_stats.get("tradeCandidateEventIds") or [],
+            market_keys=market_stats.get("tradeCandidateMarketKeys") or [],
+        )
         trades_inserted = self.repository.record_trades(trade_records)
         finished_at = datetime.now(UTC).isoformat()
 

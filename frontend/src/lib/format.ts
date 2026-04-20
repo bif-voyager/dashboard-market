@@ -1,13 +1,13 @@
-export function formatCurrency(value: number): string {
-  return new Intl.NumberFormat("en-US", {
+export function formatCurrency(value: number, locale = "en-US"): string {
+  return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(value);
 }
 
-export function formatCompactCurrency(value: number): string {
-  return new Intl.NumberFormat("en-US", {
+export function formatCompactCurrency(value: number, locale = "en-US"): string {
+  return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: "USD",
     notation: "compact",
@@ -15,21 +15,21 @@ export function formatCompactCurrency(value: number): string {
   }).format(value);
 }
 
-export function formatDateLabel(value: string): string {
-  return new Date(`${value}T00:00:00Z`).toLocaleDateString("en-US", {
+export function formatDateLabel(value: string, locale = "en-US"): string {
+  return new Date(`${value}T00:00:00Z`).toLocaleDateString(locale, {
     month: "short",
     day: "numeric",
   });
 }
 
-export function formatAsOf(value: string | null): string {
+export function formatAsOf(value: string | null, locale = "en-US", emptyLabel = "No synced data yet"): string {
   if (!value) {
-    return "No synced data yet";
+    return emptyLabel;
   }
   if (value.includes("T")) {
-    return new Date(value).toLocaleString();
+    return new Date(value).toLocaleString(locale);
   }
-  return new Date(`${value}T00:00:00Z`).toLocaleDateString("en-US", {
+  return new Date(`${value}T00:00:00Z`).toLocaleDateString(locale, {
     year: "numeric",
     month: "short",
     day: "numeric",

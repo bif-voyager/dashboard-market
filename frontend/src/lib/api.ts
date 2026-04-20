@@ -22,6 +22,7 @@ export interface VolumeResponse {
   partial: boolean;
   stale: boolean;
   warnings: string[];
+  dataQuality?: Record<string, unknown>;
   totals: {
     polymarket: number;
     kalshi: number;

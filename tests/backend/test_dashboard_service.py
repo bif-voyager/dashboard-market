@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.db.database import Database
@@ -105,7 +106,7 @@ def test_polymarket_category_filter_scales_platform_daily_series(tmp_path: Path)
 
     assert [point["polymarket"] for point in payload["points"]] == [25.0, 75.0]
     assert payload["totals"]["polymarket"] == 100.0
-    assert any("proportional estimate" in warning for warning in payload["warnings"])
+    assert any("estimated" in warning for warning in payload["warnings"])
 
 
 def test_polymarket_platform_daily_series_is_used_for_full_category_selection(tmp_path: Path) -> None:
@@ -125,21 +126,24 @@ def test_polymarket_platform_daily_series_is_used_for_full_category_selection(tm
             )
         ]
     )
+    end_day = datetime.now(UTC).date() - timedelta(days=1)
+    start_day = end_day - timedelta(days=6)
+
     repository.replace_platform_daily_volumes(
         platform="polymarket",
         source="builder-volume",
-        start_day="2026-04-13",
-        end_day="2026-04-19",
+        start_day=start_day.isoformat(),
+        end_day=end_day.isoformat(),
         records=[
             PlatformDailyVolumeRecord(
                 platform="polymarket",
-                day_utc="2026-04-13",
+                day_utc=start_day.isoformat(),
                 turnover_usd=12.0,
                 source="builder-volume",
             ),
             PlatformDailyVolumeRecord(
                 platform="polymarket",
-                day_utc="2026-04-19",
+                day_utc=end_day.isoformat(),
                 turnover_usd=30.0,
                 source="builder-volume",
             ),
@@ -160,3 +164,43 @@ def test_polymarket_platform_daily_series_is_used_for_full_category_selection(tm
     assert payload["points"][1]["polymarket"] is None
     assert payload["totals"]["polymarket"] == 42.0
     assert any("builder-volume daily series" in warning for warning in payload["warnings"])
+
+
+def test_fixed_ranges_exclude_current_incomplete_utc_day(tmp_path: Path) -> None:
+    database = Database(str(tmp_path / "dashboard.db"))
+    repository = Repository(database)
+    service = DashboardService(repository)
+
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+    repository.record_trades(
+        [
+            TradeRecord(
+                platform="kalshi",
+                trade_key="closed-day",
+                market_key="market-1",
+                trade_ts=f"{yesterday.isoformat()}T12:00:00+00:00",
+                day_utc=yesterday.isoformat(),
+                normalized_category="politics",
+                turnover_usd=10.0,
+                source="test",
+            ),
+            TradeRecord(
+                platform="kalshi",
+                trade_key="current-day",
+                market_key="market-1",
+                trade_ts=f"{today.isoformat()}T12:00:00+00:00",
+                day_utc=today.isoformat(),
+                normalized_category="politics",
+                turnover_usd=99.0,
+                source="test",
+            ),
+        ]
+    )
+
+    payload = service.build_volume_response(range_value="7d", categories=["politics"])
+
+    assert payload["points"][-1]["date"] == yesterday.isoformat()
+    assert payload["asOf"] == yesterday.isoformat()
+    assert payload["totals"]["kalshi"] == 10.0
+    assert any("current UTC day is excluded" in warning for warning in payload["warnings"])

@@ -47,7 +47,7 @@ class DashboardService:
             range_value=range_value,
             categories=selected_categories,
         )
-        end_day = datetime.now(UTC).date()
+        end_day = self._latest_closed_day()
         if range_value == "all":
             min_day, max_day = self.repository.get_date_bounds(selected_categories)
             if polymarket_category_scale is not None and polymarket_category_scale > 0:
@@ -60,7 +60,7 @@ class DashboardService:
                 points = []
             else:
                 start_date = date.fromisoformat(min_day)
-                end_day = date.fromisoformat(max_day)
+                end_day = min(date.fromisoformat(max_day), self._latest_closed_day())
                 points = self._build_points(start_date, end_day, selected_categories)
         else:
             day_count = {"7d": 7, "30d": 30, "90d": 90}[range_value]
@@ -76,7 +76,11 @@ class DashboardService:
 
         polymarket_total = round(sum(self._series_value(point["polymarket"]) for point in points), 2)
         kalshi_total = round(sum(point["kalshi"] for point in points), 2)
-        latest_day = self.repository.get_stats().get("latestDay")
+        latest_day = points[-1]["date"] if points else self.repository.get_stats().get("latestDay")
+        if self.repository.get_stats().get("latestDay") != latest_day:
+            warnings.append(
+                "The current UTC day is excluded from the chart because public daily endpoints can be incomplete until the day closes."
+            )
         poly_recent_state = next(
             (
                 state
@@ -89,11 +93,11 @@ class DashboardService:
             if polymarket_scaled_series_used:
                 if selected_categories is None or polymarket_category_scale == 1:
                     warnings.append(
-                        "Polymarket chart uses the public builder-volume daily series as a public proxy; it is not guaranteed full exchange-wide volume."
+                        "Polymarket chart uses the public builder-volume daily series as a platform-level public proxy; raw trades are only sampled for diagnostics."
                     )
                 else:
                     warnings.append(
-                        "Polymarket category filters use a proportional estimate: public builder-volume daily series scaled by selected-category metadata share."
+                        "Polymarket category filters are estimated: public builder-volume daily series scaled by selected-category metadata share."
                     )
             else:
                 warnings.append(
@@ -115,6 +119,27 @@ class DashboardService:
                 warnings.append(
                     "Kalshi totals are materialized from the current registry subset; direct market pagination did not exhaust all open/settled markets."
                 )
+        data_quality = {
+            "polymarket": {
+                "dailySeries": (
+                    "public builder-volume platform proxy"
+                    if polymarket_scaled_series_used
+                    else "materialized raw trades only"
+                ),
+                "categoryFilter": "proportional metadata-share estimate"
+                if selected_categories is not None and polymarket_category_scale not in {None, 1}
+                else "unfiltered platform proxy",
+                "rawTrades": (poly_recent_state or {}).get("stats", {}).get("tradeStats", {}).get("mode"),
+                "exact": False,
+                "partial": True,
+            },
+            "kalshi": {
+                "dailySeries": "public candlestick volume over materialized market registry",
+                "categoryFilter": "registry category aggregation",
+                "exact": False,
+                "partial": bool(kalshi_recent_state and kalshi_recent_state["partial"]),
+            },
+        }
         return VolumeResponse(
             range=range_value,
             categories=[] if selected_categories is None else selected_categories,
@@ -123,6 +148,7 @@ class DashboardService:
             partial=partial,
             stale=stale,
             warnings=warnings,
+            dataQuality=data_quality,
             totals=VolumeTotals(
                 polymarket=polymarket_total,
                 kalshi=kalshi_total,
@@ -131,6 +157,9 @@ class DashboardService:
             ),
             points=points,
         ).model_dump()
+
+    def _latest_closed_day(self) -> date:
+        return datetime.now(UTC).date() - timedelta(days=1)
 
     def _should_use_polymarket_platform_series(self, categories: list[str] | None) -> bool:
         if categories is None:
