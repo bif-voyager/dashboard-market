@@ -3,10 +3,17 @@ from pathlib import Path
 
 from app.db.database import Database
 from app.services.dashboard import DashboardService
-from app.services.repository import CategorySnapshotRecord, PlatformDailyVolumeRecord, Repository, TradeRecord
+from app.services.repository import (
+    CategorySnapshotRecord,
+    DailyVolumeRecord,
+    MarketRecord,
+    PlatformDailyVolumeRecord,
+    Repository,
+    TradeRecord,
+)
 
 
-def test_all_time_response_zero_fills_missing_days(tmp_path: Path) -> None:
+def test_all_time_response_masks_leading_and_trailing_platform_gaps(tmp_path: Path) -> None:
     database = Database(str(tmp_path / "dashboard.db"))
     repository = Repository(database)
     service = DashboardService(repository)
@@ -43,8 +50,10 @@ def test_all_time_response_zero_fills_missing_days(tmp_path: Path) -> None:
         "2026-01-02",
         "2026-01-03",
     ]
-    assert payload["points"][1]["polymarket"] == 0
-    assert payload["points"][1]["kalshi"] == 0
+    assert payload["points"][0]["kalshi"] is None
+    assert payload["points"][1]["polymarket"] is None
+    assert payload["points"][1]["kalshi"] is None
+    assert payload["points"][2]["polymarket"] is None
     assert payload["totals"]["polymarket"] == 10.0
     assert payload["totals"]["kalshi"] == 7.5
 
@@ -114,6 +123,18 @@ def test_polymarket_platform_daily_series_is_used_for_full_category_selection(tm
     repository = Repository(database)
     service = DashboardService(repository)
 
+    repository.upsert_markets(
+        [
+            MarketRecord(
+                platform="polymarket",
+                market_key="market-1",
+                title="Sports market",
+                raw_category="sports",
+                normalized_category="sports",
+                source="test",
+            )
+        ]
+    )
     repository.upsert_category_snapshots(
         [
             CategorySnapshotRecord(
@@ -204,3 +225,77 @@ def test_fixed_ranges_exclude_current_incomplete_utc_day(tmp_path: Path) -> None
     assert payload["asOf"] == yesterday.isoformat()
     assert payload["totals"]["kalshi"] == 10.0
     assert any("current UTC day is excluded" in warning for warning in payload["warnings"])
+
+
+def test_category_list_ignores_snapshot_only_categories(tmp_path: Path) -> None:
+    database = Database(str(tmp_path / "dashboard.db"))
+    repository = Repository(database)
+    service = DashboardService(repository)
+
+    repository.upsert_category_snapshots(
+        [
+            CategorySnapshotRecord(
+                platform="polymarket",
+                normalized_category="snapshot-only",
+                volume_24h=5.0,
+                volume_1wk=5.0,
+                volume_1mo=5.0,
+                volume_total=5.0,
+            )
+        ]
+    )
+    repository.upsert_markets(
+        [
+            MarketRecord(
+                platform="kalshi",
+                market_key="market-1",
+                title="Politics market",
+                raw_category="politics",
+                normalized_category="politics",
+                source="test",
+            )
+        ]
+    )
+
+    categories = service.list_categories()
+
+    assert [item["slug"] for item in categories] == ["politics"]
+
+
+def test_kalshi_all_time_quality_uses_all_backfill_metadata(tmp_path: Path) -> None:
+    database = Database(str(tmp_path / "dashboard.db"))
+    repository = Repository(database)
+    service = DashboardService(repository)
+
+    repository.replace_daily_volumes(
+        platform="kalshi",
+        start_day="2026-01-01",
+        end_day="2026-01-02",
+        records=[
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-01-01",
+                normalized_category="politics",
+                turnover_usd=10.0,
+            )
+        ],
+    )
+    repository.set_sync_state(
+        platform="kalshi",
+        scope="recent",
+        status="completed",
+        partial=False,
+        stats={},
+    )
+    repository.set_sync_state(
+        platform="kalshi",
+        scope="all",
+        status="completed",
+        partial=False,
+        stats={"candleStats": {"startDay": "2026-01-01", "endDay": "2026-01-02"}},
+    )
+
+    payload = service.build_volume_response(range_value="all", categories=["politics"])
+
+    assert payload["dataQuality"]["kalshi"]["coverage"] == "unknown"
+    assert "capped raw public trade backfill" in payload["dataQuality"]["kalshi"]["sourceLabel"]

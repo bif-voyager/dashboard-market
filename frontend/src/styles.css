@@ -544,12 +544,40 @@ a {
   color: var(--ink-soft);
 }
 
+.metric-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.metric-card__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(32, 42, 53, 0.08);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .metric-card__value {
   display: block;
   margin-top: 16px;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
   font-size: clamp(1.8rem, 4vw, 2.6rem);
   line-height: 1;
+}
+
+.metric-card__detail {
+  margin: 14px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .chart-card {
@@ -603,6 +631,77 @@ a {
   margin-bottom: 10px;
   color: var(--ink-soft);
   font-size: 0.95rem;
+}
+
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.source-card {
+  padding: 14px 16px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.source-card--sea {
+  box-shadow: inset 0 0 0 1px rgba(13, 148, 136, 0.08);
+}
+
+.source-card--ember {
+  box-shadow: inset 0 0 0 1px rgba(194, 65, 12, 0.08);
+}
+
+.source-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.source-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(32, 42, 53, 0.08);
+  color: var(--ink);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.source-badge--muted {
+  color: var(--ink-soft);
+}
+
+.source-card__body,
+.source-card__meta {
+  margin: 10px 0 0;
+}
+
+.source-card__body {
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.source-card__meta {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.45;
 }
 
 .chart-shell {
@@ -670,6 +769,10 @@ a {
 
   .metrics-grid,
   .loading-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .source-grid {
     grid-template-columns: 1fr;
   }
 

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 RangeValue = Literal["7d", "30d", "90d", "all"]
 SyncScope = Literal["recent", "all"]
+SourceType = Literal["exact", "derived", "proxy", "estimated"]
+CoverageType = Literal["full", "partial", "unknown"]
 
 
 class CategoryItem(BaseModel):
@@ -36,7 +38,7 @@ class HealthResponse(BaseModel):
 class VolumePoint(BaseModel):
     date: str
     polymarket: float | None = None
-    kalshi: float
+    kalshi: float | None = None
     total: float
 
 
@@ -47,6 +49,19 @@ class VolumeTotals(BaseModel):
     total: float
 
 
+class PlatformDataQuality(BaseModel):
+    dailySeries: str
+    sourceType: SourceType
+    sourceLabel: str
+    categoryFilter: str
+    exact: bool = False
+    isEstimated: bool = False
+    partial: bool = False
+    coverage: CoverageType = "unknown"
+    coverageReason: str | None = None
+    rawTrades: str | None = None
+
+
 class VolumeResponse(BaseModel):
     range: RangeValue
     categories: list[str]
@@ -55,13 +70,14 @@ class VolumeResponse(BaseModel):
     partial: bool = False
     stale: bool = False
     warnings: list[str] = Field(default_factory=list)
-    dataQuality: dict = Field(default_factory=dict)
+    dataQuality: dict[str, PlatformDataQuality] = Field(default_factory=dict)
     totals: VolumeTotals
     points: list[VolumePoint]
 
 
 class SyncResponse(BaseModel):
     scope: SyncScope
+    platform: str | None = None
     status: str
     partial: bool = False
     results: dict[str, dict]

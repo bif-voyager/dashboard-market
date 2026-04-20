@@ -58,12 +58,15 @@ async def volume(
 @router.post("/admin/sync", response_model=SyncResponse)
 async def sync(
     scope: str = Query(default="recent"),
+    platform: str | None = Query(default=None),
     app_services: AppServices = Depends(get_services),
 ) -> dict:
     if scope not in {"recent", "all"}:
         raise HTTPException(status_code=400, detail="scope must be recent or all")
-    result = await app_services.sync.run_sync(scope)
-    return {"scope": scope, **result}
+    if platform not in {None, "polymarket", "kalshi"}:
+        raise HTTPException(status_code=400, detail="platform must be polymarket or kalshi")
+    result = await app_services.sync.run_sync(scope, platform=platform)
+    return {"scope": scope, "platform": platform, **result}
 
 
 @router.get("/export.csv", response_class=PlainTextResponse)

@@ -35,8 +35,6 @@ class Settings(BaseSettings):
 
     kalshi_base_url: str = "https://api.elections.kalshi.com/trade-api/v2"
     kalshi_page_limit: int = 1000
-    kalshi_recent_max_pages: int = 16
-    kalshi_bootstrap_max_pages: int = 120
     kalshi_event_recent_max_pages: int = 18
     kalshi_event_bootstrap_max_pages: int = 180
     kalshi_direct_market_recent_max_pages: int = 120
@@ -44,9 +42,9 @@ class Settings(BaseSettings):
     kalshi_historical_market_recent_max_pages: int = 18
     kalshi_historical_market_bootstrap_max_pages: int = 180
     kalshi_candlestick_chunk_size: int = 100
-    kalshi_recent_trade_window_days: int = 1
-    kalshi_trade_window_max_pages: int = 20
-    kalshi_trade_min_window_hours: int = 1
+    kalshi_all_backfill_lookback_days: int = 270
+    kalshi_request_spacing_seconds: float = 0.3
+    kalshi_backfill_trade_day_max_pages: int = 20
 
     allowed_origins: list[str] = Field(
         default_factory=lambda: [

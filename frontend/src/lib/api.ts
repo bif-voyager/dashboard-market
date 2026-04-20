@@ -1,5 +1,6 @@
 export type RangeValue = "7d" | "30d" | "90d" | "all";
 export type SyncScope = "recent" | "all";
+export type SyncPlatform = "polymarket" | "kalshi";
 
 export interface CategoryItem {
   slug: string;
@@ -10,8 +11,21 @@ export interface CategoryItem {
 export interface VolumePoint {
   date: string;
   polymarket: number | null;
-  kalshi: number;
+  kalshi: number | null;
   total: number;
+}
+
+export interface PlatformDataQuality {
+  dailySeries: string;
+  sourceType: "exact" | "derived" | "proxy" | "estimated";
+  sourceLabel: string;
+  categoryFilter: string;
+  exact: boolean;
+  isEstimated: boolean;
+  partial: boolean;
+  coverage: "full" | "partial" | "unknown";
+  coverageReason?: string | null;
+  rawTrades?: string | null;
 }
 
 export interface VolumeResponse {
@@ -22,7 +36,10 @@ export interface VolumeResponse {
   partial: boolean;
   stale: boolean;
   warnings: string[];
-  dataQuality?: Record<string, unknown>;
+  dataQuality?: {
+    polymarket?: PlatformDataQuality;
+    kalshi?: PlatformDataQuality;
+  };
   totals: {
     polymarket: number;
     kalshi: number;
@@ -34,6 +51,7 @@ export interface VolumeResponse {
 
 export interface SyncResponse {
   scope: SyncScope;
+  platform?: SyncPlatform | null;
   status: string;
   partial: boolean;
   results: Record<string, Record<string, unknown>>;
@@ -75,8 +93,15 @@ export async function fetchVolume(range: RangeValue, categories: string[]): Prom
   return request<VolumeResponse>(`/api/volume?${params.toString()}`);
 }
 
-export async function syncData(scope: SyncScope): Promise<SyncResponse> {
-  return request<SyncResponse>(`/api/admin/sync?scope=${scope}`, {
+export async function syncData(
+  scope: SyncScope,
+  platform?: SyncPlatform,
+): Promise<SyncResponse> {
+  const params = new URLSearchParams({ scope });
+  if (platform) {
+    params.set("platform", platform);
+  }
+  return request<SyncResponse>(`/api/admin/sync?${params.toString()}`, {
     method: "POST",
   });
 }

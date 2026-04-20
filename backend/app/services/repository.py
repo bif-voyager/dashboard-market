@@ -378,7 +378,7 @@ class Repository:
                 FROM (
                     SELECT normalized_category, platform FROM daily_volume
                     UNION
-                    SELECT normalized_category, platform FROM category_snapshot
+                    SELECT normalized_category, platform FROM market_registry
                 )
                 GROUP BY normalized_category
                 ORDER BY normalized_category ASC
@@ -403,16 +403,12 @@ class Repository:
                     WHERE platform = ?
                     UNION
                     SELECT normalized_category
-                    FROM category_snapshot
-                    WHERE platform = ?
-                    UNION
-                    SELECT normalized_category
                     FROM market_registry
                     WHERE platform = ?
                 )
                 ORDER BY normalized_category ASC
                 """,
-                (platform, platform, platform),
+                (platform, platform),
             ).fetchall()
         return [row["normalized_category"] for row in rows]
 
@@ -539,6 +535,25 @@ class Repository:
                 """,
                 (platform,),
             ).fetchone()
+        if row is None:
+            return None, None
+        return row["min_day"], row["max_day"]
+
+    def get_daily_platform_date_bounds(
+        self,
+        platform: str,
+        categories: list[str] | None = None,
+    ) -> tuple[str | None, str | None]:
+        query = "SELECT MIN(day_utc) AS min_day, MAX(day_utc) AS max_day FROM daily_volume WHERE platform = ?"
+        params: list[object] = [platform]
+        if categories is not None:
+            if not categories:
+                return None, None
+            placeholders = ",".join("?" for _ in categories)
+            query += f" AND normalized_category IN ({placeholders})"
+            params.extend(categories)
+        with self.database.session() as connection:
+            row = connection.execute(query, params).fetchone()
         if row is None:
             return None, None
         return row["min_day"], row["max_day"]

@@ -293,7 +293,10 @@ def kalshi_turnover_usd(trade: dict) -> Decimal:
 
 
 def kalshi_candlestick_turnover_usd(candlestick: dict) -> Decimal:
-    return quantize_money(to_decimal(candlestick.get("volume_fp")))
+    volume = candlestick.get("volume_fp")
+    if volume is None:
+        volume = candlestick.get("volume")
+    return quantize_money(to_decimal(volume))
 
 
 def stable_trade_key(*parts: object) -> str:

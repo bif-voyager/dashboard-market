@@ -2,9 +2,17 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MetricCard } from "./components/MetricCard";
 import { NotificationCenter, type NotificationItem } from "./components/NotificationCenter";
+import { StatusBanner } from "./components/StatusBanner";
 import { StatePanel } from "./components/StatePanel";
 import { VolumeChart } from "./components/VolumeChart";
-import { buildCsvUrl, fetchCategories, fetchVolume, syncData, type RangeValue } from "./lib/api";
+import {
+  buildCsvUrl,
+  fetchCategories,
+  fetchVolume,
+  syncData,
+  type PlatformDataQuality,
+  type RangeValue,
+} from "./lib/api";
 import { formatCurrency } from "./lib/format";
 import {
   localeByLanguage,
@@ -54,7 +62,8 @@ function App() {
   });
 
   const syncMutation = useMutation({
-    mutationFn: syncData,
+    mutationFn: ({ scope, platform }: { scope: "recent" | "all"; platform?: "polymarket" | "kalshi" }) =>
+      syncData(scope, platform),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["categories"] });
       await queryClient.invalidateQueries({ queryKey: ["volume"] });
@@ -65,10 +74,15 @@ function App() {
   const selected = selectedCategories ?? [];
   const hasSelection = selectedCategories !== null && selected.length > 0;
   const volume = volumeQuery.data;
+  const quality = volume?.dataQuality;
+  const qualityItems = [
+    quality?.polymarket ? { platform: "Polymarket", quality: quality.polymarket, tone: "sea" as const } : null,
+    quality?.kalshi ? { platform: "Kalshi", quality: quality.kalshi, tone: "ember" as const } : null,
+  ].filter((item): item is { platform: string; quality: PlatformDataQuality; tone: "sea" | "ember" } => item !== null);
   const hasNonZeroPoints = Boolean(
     volume?.points.some((point) => {
       const polymarketValue = visiblePlatforms.polymarket ? (point.polymarket ?? 0) : 0;
-      const kalshiValue = visiblePlatforms.kalshi ? point.kalshi : 0;
+      const kalshiValue = visiblePlatforms.kalshi ? (point.kalshi ?? 0) : 0;
       return polymarketValue + kalshiValue > 0;
     }),
   );
@@ -98,6 +112,10 @@ function App() {
         ]
       : []),
   ];
+
+  function formatCoverage(qualityItem: PlatformDataQuality | undefined): string {
+    return (qualityItem?.coverage ?? "unknown").toUpperCase();
+  }
 
   function toggleCategory(slug: string) {
     if (selectedCategories === null) {
@@ -170,7 +188,13 @@ function App() {
         <div className="hero-actions">
           <button
             className="action-button"
-            onClick={() => syncMutation.mutate("recent")}
+            onClick={() =>
+              syncMutation.mutate(
+                range === "all"
+                  ? { scope: "all", platform: "kalshi" }
+                  : { scope: "recent" },
+              )
+            }
             disabled={syncMutation.isPending}
           >
             {syncMutation.isPending ? t.syncing : t.refreshData}
@@ -252,10 +276,34 @@ function App() {
 
       {!initialLoading && hasSelection && volume ? (
         <>
+          {volume.partial ? (
+            <StatusBanner kind="info">{t.partialHistory}</StatusBanner>
+          ) : null}
+          {volume.stale ? (
+            <StatusBanner kind="warning">{t.showingCachedData}</StatusBanner>
+          ) : null}
+
           <section className="metrics-grid">
-            <MetricCard title={t.polymarketVolume} value={formatCurrency(volume.totals.polymarket, locale)} tone="sea" />
-            <MetricCard title={t.kalshiVolume} value={formatCurrency(volume.totals.kalshi, locale)} tone="ember" />
-            <MetricCard title={t.difference} value={formatCurrency(volume.totals.difference, locale)} tone="ink" />
+            <MetricCard
+              title={t.polymarketVolume}
+              value={formatCurrency(volume.totals.polymarket, locale)}
+              tone="sea"
+              badge={formatCoverage(quality?.polymarket)}
+              detail={quality?.polymarket?.sourceLabel}
+            />
+            <MetricCard
+              title={t.kalshiVolume}
+              value={formatCurrency(volume.totals.kalshi, locale)}
+              tone="ember"
+              badge={formatCoverage(quality?.kalshi)}
+              detail={quality?.kalshi?.sourceLabel}
+            />
+            <MetricCard
+              title={t.difference}
+              value={formatCurrency(volume.totals.difference, locale)}
+              tone="ink"
+              detail="Computed from the currently displayed platform totals."
+            />
           </section>
 
           <section className="chart-card">
@@ -286,6 +334,29 @@ function App() {
 
             {volumeQuery.isFetching && !volumeQuery.isLoading ? (
               <div className="chart-subtle-note">{t.refreshingChart}</div>
+            ) : null}
+
+            {qualityItems.length ? (
+              <div className="source-grid" aria-label="Data source notes">
+                {qualityItems.map((item) => (
+                  <article
+                    key={item.platform}
+                    className={item.tone === "sea" ? "source-card source-card--sea" : "source-card source-card--ember"}
+                  >
+                    <div className="source-card__header">
+                      <strong>{item.platform}</strong>
+                      <div className="source-badges">
+                        <span className="source-badge">{item.quality.sourceType}</span>
+                        <span className="source-badge source-badge--muted">{formatCoverage(item.quality)}</span>
+                      </div>
+                    </div>
+                    <p className="source-card__body">{item.quality.sourceLabel}</p>
+                    {item.quality.coverageReason ? (
+                      <p className="source-card__meta">{item.quality.coverageReason}</p>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
             ) : null}
 
             {hasNonZeroPoints ? (

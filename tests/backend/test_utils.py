@@ -1,6 +1,12 @@
 from decimal import Decimal
 
-from app.utils import infer_polymarket_category, kalshi_turnover_usd, normalize_category, polymarket_turnover_usd
+from app.utils import (
+    infer_polymarket_category,
+    kalshi_candlestick_turnover_usd,
+    kalshi_turnover_usd,
+    normalize_category,
+    polymarket_turnover_usd,
+)
 
 
 def test_polymarket_turnover_uses_contract_notional() -> None:
@@ -9,6 +15,10 @@ def test_polymarket_turnover_uses_contract_notional() -> None:
 
 def test_kalshi_turnover_uses_contract_notional() -> None:
     assert kalshi_turnover_usd({"count_fp": "10.00", "yes_price_dollars": "0.5600"}) == Decimal("10.00")
+
+
+def test_kalshi_historical_candlestick_turnover_falls_back_to_volume() -> None:
+    assert kalshi_candlestick_turnover_usd({"volume": "7.50"}) == Decimal("7.50")
 
 
 def test_normalize_category_collapses_equivalent_labels() -> None:
