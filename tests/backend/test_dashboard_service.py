@@ -1,49 +1,207 @@
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from datetime import UTC, datetime, timedelta
 
+from app.config import Settings
 from app.db.database import Database
 from app.services.dashboard import DashboardService
-from app.services.repository import (
-    CategorySnapshotRecord,
-    DailyVolumeRecord,
-    MarketRecord,
-    PlatformDailyVolumeRecord,
-    Repository,
-    TradeRecord,
-)
+from app.services.repository import DailyVolumeRecord, Repository
 
 
-def test_all_time_response_masks_leading_and_trailing_platform_gaps(tmp_path: Path) -> None:
-    database = Database(str(tmp_path / "dashboard.db"))
+def build_service(tmp_path: Path) -> tuple[Repository, DashboardService]:
+    settings = Settings(sqlite_path=str(tmp_path / "dashboard.db"))
+    database = Database(settings.sqlite_path)
     repository = Repository(database)
-    service = DashboardService(repository)
+    return repository, DashboardService(settings, repository)
 
-    repository.record_trades(
-        [
-            TradeRecord(
+
+def test_categories_expose_all_markets_before_first_sync(tmp_path: Path) -> None:
+    _, service = build_service(tmp_path)
+
+    categories = service.list_categories()
+
+    assert categories == [
+        {
+            "slug": "all",
+            "label": "All markets",
+            "platforms": ["polymarket", "kalshi"],
+        }
+    ]
+
+
+def test_fixed_range_is_cut_from_latest_cached_dune_day(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
+        platform="polymarket",
+        records=[
+            DailyVolumeRecord(
                 platform="polymarket",
-                trade_key="trade-1",
-                market_key="market-1",
-                trade_ts="2026-01-01T12:00:00+00:00",
                 day_utc="2026-01-01",
-                normalized_category="politics",
+                normalized_category="all",
                 turnover_usd=10.0,
-                source="test",
+                source_query_id=7345278,
             ),
-            TradeRecord(
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-01-10",
+                normalized_category="all",
+                turnover_usd=20.0,
+                source_query_id=7345278,
+            ),
+        ],
+    )
+    repository.replace_daily_volumes(
+        platform="kalshi",
+        records=[
+            DailyVolumeRecord(
                 platform="kalshi",
-                trade_key="trade-2",
-                market_key="market-2",
-                trade_ts="2026-01-03T12:00:00+00:00",
-                day_utc="2026-01-03",
-                normalized_category="politics",
+                day_utc="2026-01-09",
+                normalized_category="all",
                 turnover_usd=7.5,
-                source="test",
-            ),
-        ]
+                source_query_id=7345291,
+            )
+        ],
     )
 
-    payload = service.build_volume_response(range_value="all", categories=["politics"])
+    payload = service.build_volume_response(range_value="7d", categories=["all"])
+
+    assert payload["points"][0]["date"] == "2026-01-04"
+    assert payload["points"][-1]["date"] == "2026-01-10"
+    assert payload["totals"]["polymarket"] == 20.0
+    assert payload["totals"]["kalshi"] == 7.5
+
+
+def test_current_utc_day_is_excluded_from_displayed_range(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+    repository.replace_daily_volumes(
+        platform="polymarket",
+        records=[
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc=yesterday.isoformat(),
+                normalized_category="all",
+                turnover_usd=10.0,
+                source_query_id=7345278,
+            ),
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc=today.isoformat(),
+                normalized_category="all",
+                turnover_usd=99.0,
+                source_query_id=7345278,
+            ),
+        ],
+    )
+
+    payload = service.build_volume_response(range_value="7d", categories=["all"])
+
+    assert payload["points"][-1]["date"] == yesterday.isoformat()
+    assert payload["totals"]["polymarket"] == 10.0
+    assert any("current UTC day is excluded" in warning for warning in payload["warnings"])
+
+
+def test_missing_platform_day_is_rendered_as_gap_not_zero(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
+        platform="polymarket",
+        records=[
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-03-07",
+                normalized_category="sports",
+                turnover_usd=100.0,
+                source_query_id=5997078,
+            ),
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-03-08",
+                normalized_category="sports",
+                turnover_usd=200.0,
+                source_query_id=5997078,
+            ),
+        ],
+    )
+    repository.replace_daily_volumes(
+        platform="kalshi",
+        records=[
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-03-07",
+                normalized_category="sports",
+                turnover_usd=300.0,
+                source_query_id=5906732,
+            ),
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-03-09",
+                normalized_category="sports",
+                turnover_usd=400.0,
+                source_query_id=5906732,
+            ),
+        ],
+    )
+
+    payload = service.build_volume_response(range_value="all", categories=["sports"])
+    gap = next(point for point in payload["points"] if point["date"] == "2026-03-08")
+
+    assert gap["polymarket"] == 200.0
+    assert gap["kalshi"] is None
+    assert gap["total"] == 200.0
+
+
+def test_kalshi_trade_report_fallback_is_labeled_as_estimated(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
+        platform="kalshi",
+        records=[
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-03-08",
+                normalized_category="sports",
+                turnover_usd=190.0,
+                source="dune-sql-kalshi-trade-report-fallback",
+                source_query_id=0,
+            )
+        ],
+    )
+
+    payload = service.build_volume_response(range_value="all", categories=["sports"])
+
+    assert payload["points"][0]["kalshi"] == 190.0
+    assert payload["dataQuality"]["kalshi"]["isEstimated"] is True
+    assert payload["dataQuality"]["kalshi"]["coverage"] == "partial"
+    assert any("corrected from kalshi.trade_report" in warning for warning in payload["warnings"])
+
+
+def test_all_time_response_masks_platform_gaps(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
+        platform="polymarket",
+        records=[
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-01-01",
+                normalized_category="all",
+                turnover_usd=10.0,
+                source_query_id=7345278,
+            )
+        ],
+    )
+    repository.replace_daily_volumes(
+        platform="kalshi",
+        records=[
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-01-03",
+                normalized_category="all",
+                turnover_usd=7.5,
+                source_query_id=7345291,
+            )
+        ],
+    )
+
+    payload = service.build_volume_response(range_value="all", categories=["all"])
 
     assert [point["date"] for point in payload["points"]] == [
         "2026-01-01",
@@ -58,287 +216,148 @@ def test_all_time_response_masks_leading_and_trailing_platform_gaps(tmp_path: Pa
     assert payload["totals"]["kalshi"] == 7.5
 
 
-def test_polymarket_category_filter_scales_platform_daily_series(tmp_path: Path) -> None:
-    database = Database(str(tmp_path / "dashboard.db"))
-    repository = Repository(database)
-    service = DashboardService(repository)
-
-    repository.upsert_category_snapshots(
-        [
-            CategorySnapshotRecord(
-                platform="polymarket",
-                normalized_category="sports",
-                volume_24h=25.0,
-                volume_1wk=100.0,
-                volume_1mo=400.0,
-                volume_total=1000.0,
-            ),
-            CategorySnapshotRecord(
-                platform="polymarket",
-                normalized_category="politics",
-                volume_24h=75.0,
-                volume_1wk=300.0,
-                volume_1mo=1200.0,
-                volume_total=3000.0,
-            ),
-        ]
-    )
-    repository.replace_platform_daily_volumes(
+def test_empty_category_selection_returns_no_points(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
         platform="polymarket",
-        source="builder-volume",
-        start_day="2026-04-18",
-        end_day="2026-04-19",
         records=[
-            PlatformDailyVolumeRecord(
+            DailyVolumeRecord(
                 platform="polymarket",
-                day_utc="2026-04-18",
-                turnover_usd=100.0,
-                source="builder-volume",
-            ),
-            PlatformDailyVolumeRecord(
-                platform="polymarket",
-                day_utc="2026-04-19",
-                turnover_usd=300.0,
-                source="builder-volume",
-            ),
-        ]
+                day_utc="2026-01-01",
+                normalized_category="all",
+                turnover_usd=10.0,
+                source_query_id=7345278,
+            )
+        ],
     )
-    repository.set_sync_state(
+
+    payload = service.build_volume_response(range_value="30d", categories=[])
+
+    assert payload["points"] == []
+    assert payload["totals"]["total"] == 0
+
+
+def test_non_all_categories_work_if_dune_query_returns_category_column(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
         platform="polymarket",
-        scope="recent",
-        status="completed",
-        partial=True,
-        stats={},
+        records=[
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-01-01",
+                normalized_category="sports",
+                turnover_usd=15.0,
+                source_query_id=7345278,
+            ),
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-01-01",
+                normalized_category="politics",
+                turnover_usd=30.0,
+                source_query_id=7345278,
+            ),
+        ],
     )
 
     payload = service.build_volume_response(range_value="all", categories=["sports"])
 
-    assert [point["polymarket"] for point in payload["points"]] == [25.0, 75.0]
-    assert payload["totals"]["polymarket"] == 100.0
-    assert any("estimated" in warning for warning in payload["warnings"])
+    assert payload["points"][0]["polymarket"] == 15.0
+    assert payload["totals"]["polymarket"] == 15.0
+    assert payload["dataQuality"]["polymarket"]["categoryFilter"] == "Dune query category column aggregation"
 
 
-def test_polymarket_platform_daily_series_is_used_for_full_category_selection(tmp_path: Path) -> None:
-    database = Database(str(tmp_path / "dashboard.db"))
-    repository = Repository(database)
-    service = DashboardService(repository)
-
-    repository.upsert_markets(
-        [
-            MarketRecord(
-                platform="polymarket",
-                market_key="market-1",
-                title="Sports market",
-                raw_category="sports",
-                normalized_category="sports",
-                source="test",
-            )
-        ]
-    )
-    repository.upsert_category_snapshots(
-        [
-            CategorySnapshotRecord(
-                platform="polymarket",
-                normalized_category="sports",
-                volume_24h=0.0,
-                volume_1wk=0.0,
-                volume_1mo=0.0,
-                volume_total=0.0,
-            )
-        ]
-    )
-    end_day = datetime.now(UTC).date() - timedelta(days=1)
-    start_day = end_day - timedelta(days=6)
-
-    repository.replace_platform_daily_volumes(
+def test_category_list_omits_all_markets_when_real_categories_exist(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
         platform="polymarket",
-        source="builder-volume",
-        start_day=start_day.isoformat(),
-        end_day=end_day.isoformat(),
         records=[
-            PlatformDailyVolumeRecord(
+            DailyVolumeRecord(
                 platform="polymarket",
-                day_utc=start_day.isoformat(),
-                turnover_usd=12.0,
-                source="builder-volume",
+                day_utc="2026-01-01",
+                normalized_category="sports",
+                turnover_usd=15.0,
+                source_query_id=7345278,
+            )
+        ],
+    )
+
+    assert [item["slug"] for item in service.list_categories()] == ["sports"]
+
+
+def test_all_category_means_every_cached_category(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
+        platform="polymarket",
+        records=[
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-01-01",
+                normalized_category="sports",
+                turnover_usd=15.0,
+                source_query_id=7345278,
             ),
-            PlatformDailyVolumeRecord(
+            DailyVolumeRecord(
                 platform="polymarket",
-                day_utc=end_day.isoformat(),
+                day_utc="2026-01-01",
+                normalized_category="politics",
                 turnover_usd=30.0,
-                source="builder-volume",
+                source_query_id=7345278,
             ),
         ],
     )
-    repository.set_sync_state(
+
+    payload = service.build_volume_response(range_value="all", categories=["all"])
+
+    assert payload["totals"]["polymarket"] == 45.0
+
+
+def test_category_scope_can_filter_only_one_platform(tmp_path: Path) -> None:
+    repository, service = build_service(tmp_path)
+    repository.replace_daily_volumes(
         platform="polymarket",
-        scope="recent",
-        status="completed",
-        partial=True,
-        stats={},
-    )
-
-    payload = service.build_volume_response(range_value="7d", categories=["sports"])
-
-    assert payload["points"][0]["polymarket"] == 12.0
-    assert payload["points"][-1]["polymarket"] == 30.0
-    assert payload["points"][1]["polymarket"] is None
-    assert payload["totals"]["polymarket"] == 42.0
-    assert any("builder-volume daily series" in warning for warning in payload["warnings"])
-
-
-def test_fixed_ranges_exclude_current_incomplete_utc_day(tmp_path: Path) -> None:
-    database = Database(str(tmp_path / "dashboard.db"))
-    repository = Repository(database)
-    service = DashboardService(repository)
-
-    today = datetime.now(UTC).date()
-    yesterday = today - timedelta(days=1)
-    repository.record_trades(
-        [
-            TradeRecord(
-                platform="kalshi",
-                trade_key="closed-day",
-                market_key="market-1",
-                trade_ts=f"{yesterday.isoformat()}T12:00:00+00:00",
-                day_utc=yesterday.isoformat(),
-                normalized_category="politics",
-                turnover_usd=10.0,
-                source="test",
-            ),
-            TradeRecord(
-                platform="kalshi",
-                trade_key="current-day",
-                market_key="market-1",
-                trade_ts=f"{today.isoformat()}T12:00:00+00:00",
-                day_utc=today.isoformat(),
-                normalized_category="politics",
-                turnover_usd=99.0,
-                source="test",
-            ),
-        ]
-    )
-
-    payload = service.build_volume_response(range_value="7d", categories=["politics"])
-
-    assert payload["points"][-1]["date"] == yesterday.isoformat()
-    assert payload["asOf"] == yesterday.isoformat()
-    assert payload["totals"]["kalshi"] == 10.0
-    assert any("current UTC day is excluded" in warning for warning in payload["warnings"])
-
-
-def test_category_list_ignores_snapshot_only_categories(tmp_path: Path) -> None:
-    database = Database(str(tmp_path / "dashboard.db"))
-    repository = Repository(database)
-    service = DashboardService(repository)
-
-    repository.upsert_category_snapshots(
-        [
-            CategorySnapshotRecord(
+        records=[
+            DailyVolumeRecord(
                 platform="polymarket",
-                normalized_category="snapshot-only",
-                volume_24h=5.0,
-                volume_1wk=5.0,
-                volume_1mo=5.0,
-                volume_total=5.0,
-            )
-        ]
-    )
-    repository.upsert_markets(
-        [
-            MarketRecord(
-                platform="kalshi",
-                market_key="market-1",
-                title="Politics market",
-                raw_category="politics",
-                normalized_category="politics",
-                source="test",
-            )
-        ]
-    )
-
-    categories = service.list_categories()
-
-    assert [item["slug"] for item in categories] == ["politics"]
-
-
-def test_kalshi_all_time_quality_uses_all_backfill_metadata(tmp_path: Path) -> None:
-    database = Database(str(tmp_path / "dashboard.db"))
-    repository = Repository(database)
-    service = DashboardService(repository)
-
-    repository.replace_daily_volumes(
-        platform="kalshi",
-        start_day="2026-01-01",
-        end_day="2026-01-02",
-        records=[
-            DailyVolumeRecord(
-                platform="kalshi",
                 day_utc="2026-01-01",
-                normalized_category="politics",
-                turnover_usd=10.0,
-            )
-        ],
-    )
-    repository.set_sync_state(
-        platform="kalshi",
-        scope="recent",
-        status="completed",
-        partial=False,
-        stats={},
-    )
-    repository.set_sync_state(
-        platform="kalshi",
-        scope="all",
-        status="completed",
-        partial=False,
-        stats={"candleStats": {"startDay": "2026-01-01", "endDay": "2026-01-02"}},
-    )
-
-    payload = service.build_volume_response(range_value="all", categories=["politics"])
-
-    assert payload["dataQuality"]["kalshi"]["coverage"] == "unknown"
-    assert "capped raw public trade backfill" in payload["dataQuality"]["kalshi"]["sourceLabel"]
-
-
-def test_partial_daily_upsert_preserves_existing_kalshi_history(tmp_path: Path) -> None:
-    database = Database(str(tmp_path / "dashboard.db"))
-    repository = Repository(database)
-    service = DashboardService(repository)
-
-    repository.replace_daily_volumes(
-        platform="kalshi",
-        start_day="2026-01-01",
-        end_day="2026-01-02",
-        records=[
-            DailyVolumeRecord(
-                platform="kalshi",
-                day_utc="2026-01-01",
-                normalized_category="politics",
-                turnover_usd=100.0,
-            ),
-            DailyVolumeRecord(
-                platform="kalshi",
-                day_utc="2026-01-02",
-                normalized_category="politics",
-                turnover_usd=200.0,
-            ),
-        ],
-    )
-
-    repository.upsert_daily_volumes(
-        platform="kalshi",
-        records=[
-            DailyVolumeRecord(
-                platform="kalshi",
-                day_utc="2026-01-02",
                 normalized_category="sports",
-                turnover_usd=50.0,
-            )
+                turnover_usd=10.0,
+                source_query_id=5997078,
+            ),
+            DailyVolumeRecord(
+                platform="polymarket",
+                day_utc="2026-01-01",
+                normalized_category="politics",
+                turnover_usd=30.0,
+                source_query_id=5997078,
+            ),
+        ],
+    )
+    repository.replace_daily_volumes(
+        platform="kalshi",
+        records=[
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-01-01",
+                normalized_category="sports",
+                turnover_usd=100.0,
+                source_query_id=7345291,
+            ),
+            DailyVolumeRecord(
+                platform="kalshi",
+                day_utc="2026-01-01",
+                normalized_category="politics",
+                turnover_usd=300.0,
+                source_query_id=7345291,
+            ),
         ],
     )
 
-    payload = service.build_volume_response(range_value="all", categories=None)
+    payload = service.build_volume_response(
+        range_value="all",
+        categories=["sports"],
+        category_scope="polymarket",
+    )
 
-    assert payload["points"][0]["kalshi"] == 100.0
-    assert payload["points"][1]["kalshi"] == 250.0
+    assert payload["categoryScope"] == "polymarket"
+    assert payload["totals"]["polymarket"] == 10.0
+    assert payload["totals"]["kalshi"] == 400.0

@@ -22,9 +22,19 @@ CATEGORY_ALIASES = {
     "economics": "economics",
     "economy": "economics",
     "culture": "entertainment",
+    "social": "entertainment",
+    "mentions": "entertainment",
     "entertainment": "entertainment",
     "world": "world",
-    "mentions": "mentions",
+    "geopolitics": "world",
+    "unknown": "uncategorized",
+    "other": "uncategorized",
+    "exotics": "uncategorized",
+    "science and technology": "science-and-technology",
+    "climate and weather": "climate-and-weather",
+    "education": "science-and-technology",
+    "health": "science-and-technology",
+    "transportation": "science-and-technology",
 }
 
 POLYMARKET_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
@@ -267,6 +277,8 @@ def infer_polymarket_category(
 
 
 def display_category(slug: str) -> str:
+    if slug == "all":
+        return "All markets"
     if slug == "uncategorized":
         return "Uncategorized"
     return " ".join(part.capitalize() for part in slug.split("-"))

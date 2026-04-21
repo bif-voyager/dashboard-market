@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.clients.kalshi import KalshiAdapter
-from app.clients.polymarket import PolymarketAdapter
+from app.clients.dune import DuneClient
 from app.config import Settings
 from app.db.database import Database
 from app.services.dashboard import DashboardService
@@ -18,8 +17,7 @@ class AppServices:
     repository: Repository
     dashboard: DashboardService
     sync: SyncService
-    polymarket: PolymarketAdapter
-    kalshi: KalshiAdapter
+    dune: DuneClient
 
 
 services: AppServices | None = None

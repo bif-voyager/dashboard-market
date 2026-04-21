@@ -40,10 +40,13 @@ async def categories(app_services: AppServices = Depends(get_services)) -> list[
 async def volume(
     range_value: str = Query(default="30d", alias="range"),
     categories: str | None = Query(default=None),
+    category_scope: str = Query(default="both", alias="categoryScope"),
     app_services: AppServices = Depends(get_services),
 ) -> dict:
     if range_value not in {"7d", "30d", "90d", "all"}:
         raise HTTPException(status_code=400, detail="range must be one of 7d, 30d, 90d, all")
+    if category_scope not in {"both", "polymarket", "kalshi"}:
+        raise HTTPException(status_code=400, detail="categoryScope must be one of both, polymarket, kalshi")
     selected_categories = None
     if categories is not None:
         selected_categories = [item.strip() for item in categories.split(",") if item.strip()]
@@ -52,6 +55,7 @@ async def volume(
     return app_services.dashboard.build_volume_response(
         range_value=range_value,
         categories=selected_categories,
+        category_scope=category_scope,
     )
 
 
@@ -73,19 +77,23 @@ async def sync(
 async def export_csv(
     range_value: str = Query(default="30d", alias="range"),
     categories: str | None = Query(default=None),
+    category_scope: str = Query(default="both", alias="categoryScope"),
     app_services: AppServices = Depends(get_services),
 ) -> str:
     if not app_services.settings.enable_csv_export:
         raise HTTPException(status_code=404, detail="CSV export is disabled")
+    if category_scope not in {"both", "polymarket", "kalshi"}:
+        raise HTTPException(status_code=400, detail="categoryScope must be one of both, polymarket, kalshi")
     payload = app_services.dashboard.build_volume_response(
         range_value=range_value,
         categories=None if categories is None else [item.strip() for item in categories.split(",") if item.strip()],
+        category_scope=category_scope,
     )
     buffer = StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["date", "platform", "category_scope", "volume_usd_notional"])
-    category_scope = ",".join(payload["categories"]) if payload["categories"] else "all"
+    writer.writerow(["date", "platform", "category_scope", "applied_to", "volume_usd_notional"])
+    category_scope_label = ",".join(payload["categories"]) if payload["categories"] else "all"
     for point in payload["points"]:
-        writer.writerow([point["date"], "polymarket", category_scope, point["polymarket"]])
-        writer.writerow([point["date"], "kalshi", category_scope, point["kalshi"]])
+        writer.writerow([point["date"], "polymarket", category_scope_label, payload["categoryScope"], point["polymarket"]])
+        writer.writerow([point["date"], "kalshi", category_scope_label, payload["categoryScope"], point["kalshi"]])
     return buffer.getvalue()

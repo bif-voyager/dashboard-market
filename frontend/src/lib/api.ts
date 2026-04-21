@@ -1,6 +1,7 @@
 export type RangeValue = "7d" | "30d" | "90d" | "all";
 export type SyncScope = "recent" | "all";
 export type SyncPlatform = "polymarket" | "kalshi";
+export type CategoryScope = "both" | "polymarket" | "kalshi";
 
 export interface CategoryItem {
   slug: string;
@@ -31,6 +32,7 @@ export interface PlatformDataQuality {
 export interface VolumeResponse {
   range: RangeValue;
   categories: string[];
+  categoryScope: CategoryScope;
   timezone: string;
   asOf: string | null;
   partial: boolean;
@@ -87,9 +89,14 @@ export async function fetchCategories(): Promise<CategoryItem[]> {
   return request<CategoryItem[]>("/api/categories");
 }
 
-export async function fetchVolume(range: RangeValue, categories: string[]): Promise<VolumeResponse> {
+export async function fetchVolume(
+  range: RangeValue,
+  categories: string[],
+  categoryScope: CategoryScope,
+): Promise<VolumeResponse> {
   const params = new URLSearchParams({ range });
   params.set("categories", categories.join(","));
+  params.set("categoryScope", categoryScope);
   return request<VolumeResponse>(`/api/volume?${params.toString()}`);
 }
 
@@ -106,7 +113,11 @@ export async function syncData(
   });
 }
 
-export function buildCsvUrl(range: RangeValue, categories: string[]): string {
-  const params = new URLSearchParams({ range, categories: categories.join(",") });
+export function buildCsvUrl(range: RangeValue, categories: string[], categoryScope: CategoryScope): string {
+  const params = new URLSearchParams({
+    range,
+    categories: categories.join(","),
+    categoryScope,
+  });
   return `${API_BASE_URL}/api/export.csv?${params.toString()}`;
 }

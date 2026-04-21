@@ -9,6 +9,7 @@ RangeValue = Literal["7d", "30d", "90d", "all"]
 SyncScope = Literal["recent", "all"]
 SourceType = Literal["exact", "derived", "proxy", "estimated"]
 CoverageType = Literal["full", "partial", "unknown"]
+CategoryScope = Literal["both", "polymarket", "kalshi"]
 
 
 class CategoryItem(BaseModel):
@@ -65,6 +66,7 @@ class PlatformDataQuality(BaseModel):
 class VolumeResponse(BaseModel):
     range: RangeValue
     categories: list[str]
+    categoryScope: CategoryScope = "both"
     timezone: str
     asOf: str | None = None
     partial: bool = False

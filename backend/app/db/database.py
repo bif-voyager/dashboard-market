@@ -11,10 +11,20 @@ from app.db.schema import SCHEMA_SQL
 
 class Database:
     def __init__(self, path: str) -> None:
-        self.path = Path(path)
+        self.path = self._resolve_path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = RLock()
         self._initialize()
+
+    def _resolve_path(self, path: str) -> Path:
+        configured_path = Path(path)
+        if configured_path.is_absolute():
+            return configured_path
+
+        runtime_root = Path(__file__).resolve().parents[2]
+        if runtime_root.name == "backend":
+            runtime_root = runtime_root.parent
+        return runtime_root / configured_path
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(

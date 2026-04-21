@@ -26,6 +26,9 @@ def test_normalize_category_collapses_equivalent_labels() -> None:
     assert normalize_category(" politics ") == "politics"
     assert normalize_category("US-current-affairs") == "politics"
     assert normalize_category("Financials") == "finance"
+    assert normalize_category("Unknown") == "uncategorized"
+    assert normalize_category("Science and Technology") == "science-and-technology"
+    assert normalize_category("Mentions") == "entertainment"
 
 
 def test_infer_polymarket_category_uses_question_and_slug_keywords() -> None:

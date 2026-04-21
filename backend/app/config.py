@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -16,35 +16,24 @@ class Settings(BaseSettings):
     api_port: int = 8000
     sqlite_path: str = "data/dashboard.db"
     request_timeout_seconds: int = 20
-    fetch_concurrency: int = 2
     sync_on_startup: bool = True
     sync_start_scope: str = "recent"
+    sync_periodic_enabled: bool = True
+    sync_periodic_interval_seconds: int = 900
     enable_csv_export: bool = True
     app_timezone: str = "UTC"
 
-    poly_gamma_base_url: str = "https://gamma-api.polymarket.com"
-    poly_data_base_url: str = "https://data-api.polymarket.com"
-    poly_page_limit: int = 500
-    poly_recent_max_pages: int = 3
-    poly_bootstrap_max_pages: int = 3
-    poly_metadata_recent_max_pages: int = 120
-    poly_metadata_bootstrap_max_pages: int = 120
-    poly_trade_candidate_events: int = 30
-    poly_trade_candidate_markets: int = 80
-    poly_trade_pages_per_candidate: int = 2
-
-    kalshi_base_url: str = "https://api.elections.kalshi.com/trade-api/v2"
-    kalshi_page_limit: int = 1000
-    kalshi_event_recent_max_pages: int = 18
-    kalshi_event_bootstrap_max_pages: int = 180
-    kalshi_direct_market_recent_max_pages: int = 120
-    kalshi_direct_market_bootstrap_max_pages: int = 300
-    kalshi_historical_market_recent_max_pages: int = 18
-    kalshi_historical_market_bootstrap_max_pages: int = 180
-    kalshi_candlestick_chunk_size: int = 100
-    kalshi_all_backfill_lookback_days: int = 270
-    kalshi_request_spacing_seconds: float = 0.3
-    kalshi_backfill_trade_day_max_pages: int = 20
+    dune_api_key: str | None = None
+    dune_base_url: str = "https://api.dune.com/api/v1"
+    dune_polymarket_query_id: int = 7350670
+    dune_kalshi_query_id: int = 7345291
+    dune_page_limit: int = 1000
+    dune_max_pages: int = 1000
+    dune_sql_performance_tier: str = "free"
+    dune_sql_poll_interval_seconds: float = 2.0
+    dune_sql_max_polls: int = 120
+    kalshi_trade_report_fallback_enabled: bool = False
+    kalshi_trade_report_fallback_days: str = ""
 
     allowed_origins: list[str] = Field(
         default_factory=lambda: [

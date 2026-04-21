@@ -4,9 +4,10 @@ import { MetricCard } from "./components/MetricCard";
 import { NotificationCenter, type NotificationItem } from "./components/NotificationCenter";
 import { StatusBanner } from "./components/StatusBanner";
 import { StatePanel } from "./components/StatePanel";
-import { VolumeChart } from "./components/VolumeChart";
+import { VolumeChart, type ChartMode } from "./components/VolumeChart";
 import {
   buildCsvUrl,
+  type CategoryScope,
   fetchCategories,
   fetchVolume,
   syncData,
@@ -30,6 +31,19 @@ const rangeOptions: { value: RangeValue; labelKey?: "allTime"; fallback: string 
   { value: "all", labelKey: "allTime", fallback: "All time" },
 ];
 
+const categoryScopeOptions: { value: CategoryScope; labelKey: "applyBoth" | "applyPolymarket" | "applyKalshi" }[] = [
+  { value: "both", labelKey: "applyBoth" },
+  { value: "polymarket", labelKey: "applyPolymarket" },
+  { value: "kalshi", labelKey: "applyKalshi" },
+];
+
+const chartModeOptions: { value: ChartMode; labelKey: "chartLine" | "chartArea" | "chartBars" | "chartStacked" }[] = [
+  { value: "line", labelKey: "chartLine" },
+  { value: "area", labelKey: "chartArea" },
+  { value: "bar", labelKey: "chartBars" },
+  { value: "stacked", labelKey: "chartStacked" },
+];
+
 type Theme = "light" | "dark";
 
 function getInitialTheme(): Theme {
@@ -48,14 +62,16 @@ function App() {
   const queryClient = useQueryClient();
   const [range, setRange] = useState<RangeValue>("30d");
   const [selectedCategories, setSelectedCategories] = useState<string[] | null>(null);
+  const [categoryScope, setCategoryScope] = useState<CategoryScope>("both");
   const [language, setLanguage] = useState<Language>("en");
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [mobileControlsHidden, setMobileControlsHidden] = useState(false);
-  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(true);
   const [visiblePlatforms, setVisiblePlatforms] = useState({
     polymarket: true,
     kalshi: true,
   });
+  const [chartMode, setChartMode] = useState<ChartMode>("line");
   const t = translations[language];
   const locale = localeByLanguage[language];
 
@@ -65,10 +81,18 @@ function App() {
   });
 
   useEffect(() => {
-    if (!categoriesQuery.data || selectedCategories !== null) {
+    if (!categoriesQuery.data) {
       return;
     }
-    setSelectedCategories(categoriesQuery.data.map((item) => item.slug));
+    const availableSlugs = categoriesQuery.data.map((item) => item.slug);
+    if (selectedCategories === null) {
+      setSelectedCategories(availableSlugs);
+      return;
+    }
+    const normalizedSelection = selectedCategories.filter((item) => availableSlugs.includes(item));
+    if (normalizedSelection.length !== selectedCategories.length) {
+      setSelectedCategories(normalizedSelection.length > 0 ? normalizedSelection : availableSlugs);
+    }
   }, [categoriesQuery.data, selectedCategories]);
 
   useEffect(() => {
@@ -121,10 +145,12 @@ function App() {
   }, []);
 
   const volumeQuery = useQuery({
-    queryKey: ["volume", range, selectedCategories],
-    queryFn: () => fetchVolume(range, selectedCategories ?? []),
+    queryKey: ["volume", range, selectedCategories, categoryScope],
+    queryFn: () => fetchVolume(range, selectedCategories ?? [], categoryScope),
     enabled: selectedCategories !== null && selectedCategories.length > 0,
     placeholderData: (previous) => previous,
+    refetchInterval: 300_000,
+    refetchIntervalInBackground: false,
   });
 
   const syncMutation = useMutation({
@@ -138,6 +164,7 @@ function App() {
 
   const categories = categoriesQuery.data ?? [];
   const selected = selectedCategories ?? [];
+  const allCategoriesSelected = categories.length > 0 && selected.length === categories.length;
   const hasSelection = selectedCategories !== null && selected.length > 0;
   const volume = volumeQuery.data;
   const quality = volume?.dataQuality;
@@ -180,6 +207,10 @@ function App() {
     if (selectedCategories === null) {
       return;
     }
+    if (allCategoriesSelected) {
+      setSelectedCategories([slug]);
+      return;
+    }
     if (selectedCategories.includes(slug)) {
       setSelectedCategories(selectedCategories.filter((item) => item !== slug));
       return;
@@ -192,6 +223,14 @@ function App() {
 
   function selectAllCategories() {
     setSelectedCategories(categories.map((item) => item.slug));
+  }
+
+  function toggleAllCategories() {
+    if (allCategoriesSelected) {
+      setSelectedCategories([]);
+      return;
+    }
+    selectAllCategories();
   }
 
   function toggleTheme() {
@@ -265,7 +304,7 @@ function App() {
             onClick={() =>
               syncMutation.mutate(
                 range === "all"
-                  ? { scope: "all", platform: "kalshi" }
+                  ? { scope: "all" }
                   : { scope: "recent" },
               )
             }
@@ -275,7 +314,7 @@ function App() {
           </button>
           <a
             className="action-button action-button--ghost"
-            href={buildCsvUrl(range, selected)}
+            href={buildCsvUrl(range, selected, categoryScope)}
             target="_blank"
             rel="noreferrer"
           >
@@ -315,9 +354,25 @@ function App() {
               <span>{t.categories}</span>
               <strong>{selected.length}</strong>
             </button>
-            <button className="mini-button" onClick={selectAllCategories} disabled={!categories.length}>
-              {t.selectAll}
+            <button className="mini-button" onClick={toggleAllCategories} disabled={!categories.length}>
+              {allCategoriesSelected ? t.clearAll : t.selectAll}
             </button>
+          </div>
+          <div className="filter-scope-row" aria-label={t.filterAppliesTo}>
+            <span>{t.filterAppliesTo}</span>
+            <div className="scope-pill-row">
+              {categoryScopeOptions.map((item) => (
+                <button
+                  key={item.value}
+                  className={item.value === categoryScope ? "scope-pill scope-pill--active" : "scope-pill"}
+                  type="button"
+                  onClick={() => setCategoryScope(item.value)}
+                  aria-pressed={item.value === categoryScope}
+                >
+                  {t[item.labelKey]}
+                </button>
+              ))}
+            </div>
           </div>
           {categoriesOpen ? (
             <div className="chip-grid">
@@ -348,7 +403,25 @@ function App() {
         </section>
       ) : null}
 
-      {!initialLoading && hasSelection && volume ? (
+      {!initialLoading && hardError ? (
+        <StatePanel
+          title={t.failedToLoad}
+          body={hardError instanceof Error ? hardError.message : t.failedToLoad}
+          action={
+            <button
+              className="action-button"
+              onClick={() => {
+                void categoriesQuery.refetch();
+                void volumeQuery.refetch();
+              }}
+            >
+              {t.refreshData}
+            </button>
+          }
+        />
+      ) : null}
+
+      {!initialLoading && !hardError && hasSelection && volume ? (
         <>
           {volume.stale ? (
             <StatusBanner kind="warning">{t.showingCachedData}</StatusBanner>
@@ -383,23 +456,38 @@ function App() {
                 <span className="eyebrow">{t.combinedView}</span>
                 <h2>{t.chartTitle}</h2>
               </div>
-              <div className="legend-row">
-                <button
-                  className={visiblePlatforms.polymarket ? "legend-chip legend-chip--sea" : "legend-chip legend-chip--muted"}
-                  onClick={() => togglePlatform("polymarket")}
-                  aria-pressed={visiblePlatforms.polymarket}
-                  type="button"
-                >
-                  Polymarket
-                </button>
-                <button
-                  className={visiblePlatforms.kalshi ? "legend-chip legend-chip--ember" : "legend-chip legend-chip--muted"}
-                  onClick={() => togglePlatform("kalshi")}
-                  aria-pressed={visiblePlatforms.kalshi}
-                  type="button"
-                >
-                  Kalshi
-                </button>
+              <div className="chart-control-stack">
+                <div className="chart-mode-row" aria-label={t.chartType}>
+                  {chartModeOptions.map((item) => (
+                    <button
+                      key={item.value}
+                      className={item.value === chartMode ? "chart-mode-pill chart-mode-pill--active" : "chart-mode-pill"}
+                      type="button"
+                      onClick={() => setChartMode(item.value)}
+                      aria-pressed={item.value === chartMode}
+                    >
+                      {t[item.labelKey]}
+                    </button>
+                  ))}
+                </div>
+                <div className="legend-row">
+                  <button
+                    className={visiblePlatforms.polymarket ? "legend-chip legend-chip--sea" : "legend-chip legend-chip--muted"}
+                    onClick={() => togglePlatform("polymarket")}
+                    aria-pressed={visiblePlatforms.polymarket}
+                    type="button"
+                  >
+                    Polymarket
+                  </button>
+                  <button
+                    className={visiblePlatforms.kalshi ? "legend-chip legend-chip--ember" : "legend-chip legend-chip--muted"}
+                    onClick={() => togglePlatform("kalshi")}
+                    aria-pressed={visiblePlatforms.kalshi}
+                    type="button"
+                  >
+                    Kalshi
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -412,7 +500,12 @@ function App() {
             ) : null}
 
             {hasNonZeroPoints ? (
-              <VolumeChart data={volume.points} visiblePlatforms={visiblePlatforms} language={language} />
+              <VolumeChart
+                data={volume.points}
+                visiblePlatforms={visiblePlatforms}
+                language={language}
+                chartMode={chartMode}
+              />
             ) : (
               <StatePanel
                 title={t.noVolumeTitle}
